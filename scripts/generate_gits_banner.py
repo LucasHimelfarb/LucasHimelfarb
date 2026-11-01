@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Genera assets/gits-banner.svg: una escena pixel art cyberpunk (Ghost in the
+"""Genera assets/ghost-detected.svg: una escena pixel art cyberpunk (Ghost in the
 Shell / Blade Runner) con tu avatar integrado como personaje en primer plano.
 
 Uso:
@@ -511,6 +511,6 @@ body.append(f'<rect x="{TX}" y="{TY + 10}" width="{len(TEXT) * 6 - 1}" height="1
 svg = (f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {W} {H}" width="{OUT_W}" height="{OUT_H}" '
        f'shape-rendering="crispEdges"><defs>{"".join(defs)}</defs><style>{"".join(css)}</style>'
        f'{rect(0, 0, W, H, "#05060c")}{"".join(body)}</svg>')
-out = ROOT / "assets" / "gits-banner.svg"
+out = ROOT / "assets" / "ghost-detected.svg"
 out.write_text(svg)
 print(f"{out} ({len(svg) // 1024} KB)")
