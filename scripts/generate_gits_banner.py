@@ -54,6 +54,11 @@ BIG = {  # 5x7
  "R":["11110","10001","10001","11110","10100","10010","10001"],
  "S":["01111","10000","10000","01110","00001","00001","11110"],
  "U":["10001","10001","10001","10001","10001","10001","01110"],
+ "D":["11110","10001","10001","10001","10001","10001","11110"],
+ "G":["01110","10001","10000","10111","10001","10001","01111"],
+ "N":["10001","11001","10101","10011","10001","10001","10001"],
+ "O":["01110","10001","10001","10001","10001","10001","01110"],
+ "T":["11111","00100","00100","00100","00100","00100","00100"],
  " ":["00000"]*7,
 }
 SMALL = {  # 3x5
@@ -65,7 +70,7 @@ SMALL = {  # 3x5
  "O":["010","101","101","101","010"], "R":["110","101","110","101","101"],
  "S":["011","100","010","001","110"], "T":["111","010","010","010","010"],
  "V":["101","101","101","101","010"], "Y":["101","101","010","010","010"],
- "W":["101","101","111","111","101"], "/":["001","001","010","100","100"],
+ "W":["101","101","111","111","101"], "H":["101","101","111","101","101"], "/":["001","001","010","100","100"],
  ">":["100","010","001","010","100"], ",":["000","000","000","010","100"],
  ".":["000","000","000","000","010"], ":":["000","010","000","010","000"],
  "1":["010","110","010","010","111"], "9":["111","101","111","001","111"],
@@ -124,9 +129,9 @@ body.append(rect(0, 50, W, 30, "url(#fog)"))
 # ---------------------------------------------------------------- texto HUD (izquierda)
 HUD = "#7dffc4"
 lines = [
-    (text_px("LUCAS HIMELFARB", BIG, 8, 12, 6), "#e8fff4"),
-    (text_px("> REACT NATIVE ENGINEER", SMALL, 8, 23, 4), HUD),
-    (text_px("> CORDOBA, AR", SMALL, 8, 30, 4), HUD),
+    (text_px("GHOST DETECTED", BIG, 8, 12, 6), "#e8fff4"),
+    (text_px("> CYBERBRAIN SYNC", SMALL, 8, 23, 4), HUD),
+    (text_px("> DIVING INTO THE NET", SMALL, 8, 30, 4), HUD),
 ]
 CYCLE, idx = 14, 0
 total = sum(len(l) for l, _ in lines)
@@ -138,7 +143,17 @@ for chars, color in lines:
             st = f' style="animation:t{idx} {CYCLE}s infinite"'
             body.append(g({(x+1, y+1) for x, y in px}, "#020605", st) + g(px, color, st))
         idx += 1
-body.append(rect(8 + 13 * 4, 30, 3, 5, HUD, ' style="animation:bl 1s infinite steps(1)"'))
+body.append(rect(8 + 21 * 4 + 1, 30, 3, 5, HUD, ' style="animation:bl 1s infinite steps(1)"'))
+# barra de sincronización: aparece tras escribir la línea 2 y se llena
+sync_on = 4 + 31 * 50 / total
+css.append(f"@keyframes syncv{{0%,{sync_on:.1f}%{{opacity:0}}{sync_on+.1:.1f}%,94%{{opacity:1}}94.1%,100%{{opacity:0}}}}"
+           f"@keyframes syncf{{0%,{sync_on:.1f}%{{transform:scaleX(0)}}{sync_on+20:.1f}%,100%{{transform:scaleX(1)}}}}")
+bx, by, bw = 8 + 17 * 4 + 2, 23, 30
+body.append(f'<g style="animation:syncv {CYCLE}s infinite">'
+            + g({(bx + i, by) for i in range(bw)} | {(bx + i, by + 4) for i in range(bw)}
+                | {(bx, by + j) for j in range(5)} | {(bx + bw - 1, by + j) for j in range(5)}, HUD, ' opacity=".7"')
+            + f'<rect x="{bx+2}" y="{by+2}" width="{bw-4}" height="1" fill="#e8fff4" '
+              f'style="transform-origin:{bx+2}px {by}px;animation:syncf {CYCLE}s infinite steps(13)"/></g>')
 # esquinas HUD
 for x, y, sx, sy in [(4, 6, 1, 1), (110, 6, -1, 1), (4, 38, 1, -1), (110, 38, -1, -1)]:
     body.append(g({(x, y), (x + sx, y), (x + 2*sx, y), (x, y + sy), (x, y + 2*sy)}, HUD, ' opacity=".6"'))
