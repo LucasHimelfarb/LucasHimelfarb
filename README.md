@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/pixel-banner.svg" alt="Escena pixel art animada: Hola, soy Lucas" width="100%">
+  <img src="assets/gits-banner.svg" alt="Retrato pixel art de Lucas en una ciudad cyberpunk con helicópteros policiales" width="100%">
 </p>
 
  👉 lucashimelfarb@gmail.com 👈
