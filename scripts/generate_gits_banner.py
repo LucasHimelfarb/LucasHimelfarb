@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Genera assets/ghost-detected-2049.svg: una escena pixel art cyberpunk (Ghost in the
+"""Genera assets/lucas-himelfarb-banner.svg: una escena pixel art cyberpunk (Ghost in the
 Shell / Blade Runner) con tu avatar integrado como personaje en primer plano.
 
 Uso:
@@ -484,7 +484,7 @@ defs.append('<radialGradient id="vig" cx=".5" cy=".5" r=".75"><stop offset=".55"
 body.append(rect(0, 0, W, H, "url(#vig)"))
 body.append(rect(0, 0, W, 6, "#000") + rect(0, H - 6, W, 6, "#000"))  # franjas cinemascope
 
-# ============================================================ 12. texto HUD: GHOST DETECTED
+# ============================================================ 12. texto: nombre
 FONT = {
  "G": ["01110", "10001", "10000", "10111", "10001", "10001", "01111"],
  "H": ["10001", "10001", "10001", "11111", "10001", "10001", "10001"],
@@ -494,9 +494,17 @@ FONT = {
  "D": ["11110", "10001", "10001", "10001", "10001", "10001", "11110"],
  "E": ["11111", "10000", "10000", "11110", "10000", "10000", "11111"],
  "C": ["01110", "10001", "10000", "10000", "10000", "10001", "01110"],
+ "L": ["10000", "10000", "10000", "10000", "10000", "10000", "11111"],
+ "U": ["10001", "10001", "10001", "10001", "10001", "10001", "01110"],
+ "A": ["01110", "10001", "10001", "11111", "10001", "10001", "10001"],
+ "I": ["01110", "00100", "00100", "00100", "00100", "00100", "01110"],
+ "M": ["10001", "11011", "10101", "10101", "10001", "10001", "10001"],
+ "F": ["11111", "10000", "10000", "11110", "10000", "10000", "10000"],
+ "R": ["11110", "10001", "10001", "11110", "10100", "10010", "10001"],
+ "B": ["11110", "10001", "10001", "11110", "10001", "10001", "11110"],
  " ": ["00000"] * 7,
 }
-TEXT, TX, TY, TC = "GHOST DETECTED", 12, 14, "#d8f6f0"
+TEXT, TX, TY, TC = "LUCAS HIMELFARB", 12, 14, "#d8f6f0"
 TCYC = 16
 css.append(f"@keyframes bl{{0%,49%{{opacity:1}}50%,100%{{opacity:0}}}}"
            f"@keyframes tglitch{{0%,62%,64%,100%{{transform:translateX(0)}}62.5%{{transform:translateX(2px)}}63.2%{{transform:translateX(-1px)}}}}")
@@ -522,6 +530,6 @@ body.append(f'<rect x="{TX}" y="{TY + 10}" width="{len(TEXT) * 6 - 1}" height="1
 svg = (f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {W} {H}" width="{OUT_W}" height="{OUT_H}" '
        f'shape-rendering="crispEdges"><defs>{"".join(defs)}</defs><style>{"".join(css)}</style>'
        f'{rect(0, 0, W, H, "#05060c")}{"".join(body)}</svg>')
-out = ROOT / "assets" / "ghost-detected-2049.svg"
+out = ROOT / "assets" / "lucas-himelfarb-banner.svg"
 out.write_text(svg)
 print(f"{out} ({len(svg) // 1024} KB)")
