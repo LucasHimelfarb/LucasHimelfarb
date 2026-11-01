@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Genera assets/ghost-detected.svg: una escena pixel art cyberpunk (Ghost in the
+"""Genera assets/ghost-detected-2049.svg: una escena pixel art cyberpunk (Ghost in the
 Shell / Blade Runner) con tu avatar integrado como personaje en primer plano.
 
 Uso:
@@ -8,7 +8,7 @@ Uso:
 
 Entrada: assets/avatar-cutout.png (avatar con el fondo removido, RGBA).
 Las capas estáticas se rasterizan en numpy y se incrustan como PNG; las
-animaciones (llamaradas, reflectores, helicópteros, niebla, lluvia, carteles,
+animaciones (llamaradas, reflectores, autos voladores, niebla, lluvia, carteles,
 luz sobre el personaje) se hacen con SVG + CSS.
 """
 import base64
@@ -193,29 +193,27 @@ for i, (ox, d, a0, a1) in enumerate([(52, 11, -28, 10), (138, 14, 18, -16), (206
     body.append(f'<g style="transform-origin:{ox}px 110px;animation:{k} {d}s infinite ease-in-out">'
                 f'<polygon points="{ox - 1},110 {ox + 1},110 {ox + 12},-20 {ox - 12},-20" fill="url(#sl)"/></g>')
 
-# ============================================================ helicópteros policiales
-HELI = [
-    "......RRRRRRRRRRRRRRRRRRRRRR..",
-    "..............mm..............",
-    "...........hhhhhhhh...........",
-    "T.........hbbbbbbbbbgg........",
-    "TT.......bbbbbbbbbbbggg.......",
-    "TTbbbbbbbbbbbbbbbbbbgggg......",
-    "T....l....wwwwwwwwwwwwwww.....",
-    "..........bbbbbbbbbbbbbbL.....",
-    "............s.......s.........",
-    "..........sssssssssssssss.....",
+# ============================================================ autos voladores policiales
+CAR = [
+    "..............rrbb..........",
+    "..........hhhhhhhhh.........",
+    "........hhgggggggghhh.......",
+    ".....hhhbggggggggggbbbhh....",
+    "..hhbbbbbbbbbbbbbbbbbbbbbhh.",
+    "lbbbbwwwwwwwwwwwwwwwwwbbbbbH",
+    ".bbbbbbbbbbbbbbbbbbbbbbbbbb.",
+    "...dddd..............dddd...",
 ]
-HPAL = {"b": "#1c1f28", "h": "#3b4252", "w": "#5d6675", "g": "#7fd4e8", "m": "#0c0d12",
-        "s": "#0c0d12", "T": "#4a5262"}
-HW = len(HELI[0])
-css.append("@keyframes rA{0%,49%{opacity:1}50%,100%{opacity:0}}@keyframes rB{0%,49%{opacity:0}50%,100%{opacity:1}}"
-           "@keyframes red{0%,49%{opacity:1}50%,100%{opacity:.08}}@keyframes blu{0%,49%{opacity:.08}50%,100%{opacity:1}}"
-           "@keyframes hsweep{0%,100%{transform:rotate(-12deg)}50%{transform:rotate(14deg)}}"
+CPAL = {"b": "#1a1d26", "h": "#434b5c", "w": "#7a8496", "g": "#3f8ea3", "d": "#0b0c11"}
+HW = len(CAR[0])
+css.append("@keyframes red{0%,49%{opacity:1}50%,100%{opacity:.08}}@keyframes blu{0%,49%{opacity:.08}50%,100%{opacity:1}}"
+           "@keyframes thr{0%,100%{opacity:.95}30%{opacity:.55}60%{opacity:1}80%{opacity:.7}}"
            "@keyframes bob{0%,100%{transform:translateY(0)}50%{transform:translateY(1.5px)}}")
-defs.append('<linearGradient id="hb" x1="0" y1="0" x2="0" y2="1">'
-            '<stop offset="0" stop-color="#eef6ff" stop-opacity=".35"/>'
-            '<stop offset=".75" stop-color="#eef6ff" stop-opacity="0"/></linearGradient>')
+defs.append('<linearGradient id="hl" x1="0" y1="0" x2="1" y2="0">'
+            '<stop offset="0" stop-color="#f4f8ff" stop-opacity=".4"/>'
+            '<stop offset="1" stop-color="#f4f8ff" stop-opacity="0"/></linearGradient>'
+            '<radialGradient id="tg"><stop offset="0" stop-color="#ff9a50" stop-opacity=".8"/>'
+            '<stop offset="1" stop-color="#ff5a20" stop-opacity="0"/></radialGradient>')
 
 
 def runs(px):
@@ -233,18 +231,19 @@ def runs(px):
     return "".join(out)
 
 
-def helicopter():
-    s = "".join(f'<g fill="{c}">{runs({(x, y) for y, r in enumerate(HELI) for x, ch in enumerate(r) if ch == k and y})}</g>'
-                for k, c in HPAL.items())
-    s += f'<g fill="#8b93a3" style="animation:rA .1s infinite steps(1)">{runs({(x, 0) for x, c in enumerate(HELI[0]) if c == "R"})}</g>'
-    s += f'<g fill="#8b93a3" style="animation:rB .1s infinite steps(1)">{runs({(x, 0) for x in range(11, 19)})}</g>'
-    s += rect(5, 6, 1, 1, "#ff3048", ' style="animation:red .45s infinite steps(1)"')
-    s += rect(13, 2, 2, 1, "#ff3048", ' style="animation:red .45s infinite steps(1)"')
-    s += rect(15, 2, 2, 1, "#3d6bff", ' style="animation:blu .45s infinite steps(1)"')
-    s += rect(24, 7, 1, 1, "#3d6bff", ' style="animation:blu .45s infinite steps(1)"')
-    beam = ('<g style="transform-origin:23px 9px;animation:hsweep 5s infinite ease-in-out">'
-            '<polygon points="22,9 24,9 40,90 6,90" fill="url(#hb)"/></g>')
-    return beam + s
+def flying_car():
+    s = '<polygon points="27,5 28,6 70,22 70,-6" fill="url(#hl)"/>'          # faros
+    for px in (3, 22):                                                    # brillo de propulsores
+        s += (f'<g style="animation:thr .35s {px / 50:.2f}s infinite">'
+              f'<ellipse cx="{px + 2}" cy="9" rx="5" ry="3" fill="url(#tg)"/>'
+              + rect(px, 8, 4, 1, "#ffd28a") + rect(px + 1, 9, 2, 1, "#ff8a3a") + "</g>")
+    s += "".join(f'<g fill="{c}">{runs({(x, y) for y, r in enumerate(CAR) for x, ch in enumerate(r) if ch == k})}</g>'
+                 for k, c in CPAL.items())
+    s += rect(27, 5, 1, 1, "#f4f8ff")                                    # faro
+    s += rect(0, 5, 1, 1, "#ff3048")                                     # luz trasera
+    s += rect(14, 0, 2, 1, "#ff3048", ' style="animation:red .4s infinite steps(1)"')
+    s += rect(16, 0, 2, 1, "#3d6bff", ' style="animation:blu .4s infinite steps(1)"')
+    return s
 
 
 def flight(y, scale, dur, delay, ltr, op):
@@ -254,10 +253,22 @@ def flight(y, scale, dur, delay, ltr, op):
     flip = "" if ltr else f"translate({HW * scale} 0) scale(-1 1) "
     return (f'<g style="transform:translate({a}px,{y}px);animation:{k} {dur}s {delay}s infinite linear">'
             f'<g style="animation:bob 2s infinite ease-in-out"><g transform="{flip}scale({scale})" opacity="{op}">'
-            f'{helicopter()}</g></g></g>')
+            f'{flying_car()}</g></g></g>')
 
 
-body.append(flight(34, .35, 40, 0, True, .7))    # muy lejano
+# tráfico aéreo lejano: pares de luces cruzando en carriles
+for lane, (ly, n, dur) in enumerate([(30, 5, 34), (44, 6, 28), (58, 4, 22)]):
+    for j in range(n):
+        ltr = (lane + j) % 2 == 0
+        k = nid("tr")
+        a, b = (-4, W + 4) if ltr else (W + 4, -4)
+        dy = random.randint(-2, 2)
+        css.append(f"@keyframes {k}{{from{{transform:translate({a}px,{ly + dy}px)}}to{{transform:translate({b}px,{ly + dy}px)}}}}")
+        col = "#ffe2b0" if ltr else "#ff4a5a"
+        body.append(f'<g opacity="{.35 + lane * .15:.2f}" style="transform:translate({a}px,{ly}px);'
+                    f'animation:{k} {dur * random.uniform(.8, 1.3):.1f}s {-random.uniform(0, dur):.1f}s infinite linear">'
+                    f'{rect(0, 0, 2, 1, col)}</g>')
+body.append(flight(36, .35, 40, 0, True, .7))    # auto volador muy lejano
 
 # ============================================================ 5. niebla lejana (deriva)
 def fog_layer(y0, y1, seed, color, maxa, dur, rev=False):
@@ -373,7 +384,7 @@ for i, (hi, lo) in enumerate(SCREENS):
                 f'{image(full.astype(np.uint8))}</g>')
 body.append(rect(bx - 1, by - 1, bw_ + 2, 1, "#0c0b12") + rect(bx - 1, by + bh_, bw_ + 2, 1, "#0c0b12"))
 
-body.append(flight(16, .55, 26, 4, False, .9))   # helicóptero medio
+body.append(flight(16, .55, 26, 4, False, .9))   # auto volador medio
 body.append(fog_layer(96, 128, 47, (120, 64, 64), .3, 60, rev=True))
 
 # ============================================================ 8. azotea en primer plano
@@ -455,7 +466,7 @@ clip = nid("lc")
 defs.append(f'<clipPath id="{clip}"><rect x="{CX + LX0}" y="{CY + LY0}" width="{LX1 - LX0}" height="{LY1 - LY0}"/></clipPath>')
 body.append(f'<g clip-path="url(#{clip})"><g style="animation:glint 6s infinite ease-in-out">{image(gl.astype(np.uint8), CX, CY)}</g></g>')
 
-body.append(flight(4, .8, 19, 10, True, 1))      # helicóptero cercano (pasa delante)
+body.append(flight(12, .8, 19, 10, True, 1))      # auto volador cercano (pasa delante)
 
 # ============================================================ 10. lluvia
 css.append(f"@keyframes rain{{from{{transform:translate(0,0)}}to{{transform:translate(-8px,{H}px)}}}}")
@@ -511,6 +522,6 @@ body.append(f'<rect x="{TX}" y="{TY + 10}" width="{len(TEXT) * 6 - 1}" height="1
 svg = (f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {W} {H}" width="{OUT_W}" height="{OUT_H}" '
        f'shape-rendering="crispEdges"><defs>{"".join(defs)}</defs><style>{"".join(css)}</style>'
        f'{rect(0, 0, W, H, "#05060c")}{"".join(body)}</svg>')
-out = ROOT / "assets" / "ghost-detected.svg"
+out = ROOT / "assets" / "ghost-detected-2049.svg"
 out.write_text(svg)
 print(f"{out} ({len(svg) // 1024} KB)")
