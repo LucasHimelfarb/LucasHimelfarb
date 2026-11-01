@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Genera assets/lucas-himelfarb-banner.svg: una escena pixel art cyberpunk (Ghost in the
+"""Genera assets/lucas-himelfarb-banner-v2.svg: una escena pixel art cyberpunk (Ghost in the
 Shell / Blade Runner) con tu avatar integrado como personaje en primer plano.
 
 Uso:
@@ -131,27 +131,64 @@ def haze_col(y):
     return ramp(np.clip((y - 30) / (H - 30), 0, 1), [(0, (40, 26, 44)), (.6, (150, 72, 48)), (1, (110, 48, 40))])
 
 
+# ============================================================ siluetas futuristas
+def silhouette(kind, x, bw, top, flip=False):
+    """Máscara (H,W) de un edificio con forma no rectangular."""
+    m = np.zeros((H, W), bool)
+    bh = H - top
+    for r in range(bh):
+        y = top + r
+        L, R = 0, bw
+        if kind == "taper":            # se afina hacia arriba (trapecio) + aguja
+            k = max(0, 1 - r / max(1, bh * .55))
+            ins = round(bw * .32 * k)
+            L, R = ins, bw - ins
+        elif kind == "stepped":        # escalonado en 3 niveles
+            tier = min(3, r // max(2, bh // 7))
+            ins = round((3 - tier) * bw / 8)
+            L, R = ins, bw - ins
+        elif kind == "slant":          # techo inclinado de un lado
+            s_ = max(2, bw * 2 // 3)
+            if r < s_:
+                R = max(2, round(bw * (r + 1) / s_))
+        elif kind == "chamfer":        # esquinas cortadas a 45°
+            c = max(2, bw // 3)
+            if r < c:
+                L, R = c - r, bw - (c - r)
+        elif kind == "needle":         # torre fina con cuerpo superior más angosto
+            if r < bh * .4:
+                ins = max(1, bw // 2 - 2)
+                L, R = ins, bw - ins
+        if flip:
+            L, R = bw - R, bw - L
+        xa, xb = max(0, x + L), min(W, x + R)
+        if xb > xa:
+            m[y, xa:xb] = True
+    if kind in ("taper", "needle"):  # aguja
+        cx = x + bw // 2
+        if 0 <= cx < W:
+            m[max(0, top - random.randint(4, 9)):top, cx] = True
+    return m
+
+
+KINDS = ["taper", "stepped", "slant", "chamfer", "needle"]
+
 # ============================================================ 2. megaestructuras lejanas
 far = np.zeros((H, W)); far_lights = np.zeros((H, W))
 stacks = []
 x = -4
 while x < W:
-    bw = random.randint(5, 16)
+    bw = random.randint(6, 16)
     top = random.randint(42, 86)
-    if random.random() < .12:
-        top = random.randint(14, 30)  # megatorre
-    steps = random.randint(0, 2)
-    for s in range(steps + 1):
-        inset = s * 2
-        t = top + (steps - s) * random.randint(3, 7) if s < steps else top
-        far[min(t + (steps - s) * 6, HORIZON):HORIZON + 30, max(0, x + inset):max(0, x + bw - inset)] = 1
-    for wy in range(top + 2, HORIZON, 2):
-        for wx in range(x + 1, x + bw - 1):
-            if 0 <= wx < W and far[wy, wx] and random.random() < .05:
-                far_lights[wy, wx] = random.uniform(.4, 1)
-    if random.random() < .18 and 8 < x < W - 120:
-        stacks.append(x + bw // 2)
-    x += bw + random.randint(-2, 3)
+    kind = random.choice(KINDS)
+    if random.random() < .14:
+        top, kind, bw = random.randint(12, 28), random.choice(["taper", "needle", "stepped"]), random.randint(10, 18)
+    m = silhouette(kind, x, bw, top, flip=random.random() < .5)
+    m[HORIZON + 30:] = False
+    far[m] = 1
+    lit = m & (np.roll(m, 1, 1)) & (np.roll(m, -1, 1)) & (yy % 2 == 0) & (yy < HORIZON)
+    far_lights[lit & (rng.random((H, W)) < .06)] = rng.uniform(.4, 1)
+    x += bw + random.randint(-3, 2)
 for sx in [24, 66, 118]:
     far[HORIZON - 14:HORIZON + 30, sx:sx + 2] = 1  # chimeneas de las llamaradas
     stacks.append(sx)
@@ -290,49 +327,90 @@ body.append(fog_layer(70, 112, 31, (170, 92, 70), .35, 90))
 
 # ============================================================ 6. edificios medios
 mid = np.zeros((H, W)); mid_rgb = np.zeros((H, W, 3)); flick = np.zeros((H, W, 4))
-BILL = None
+WIN_WARM, WIN_CYAN = np.array([230, 150, 80]), np.array([120, 210, 230])
+
+
+def paint_building(m, base, light_dir_split=None):
+    """Pinta una silueta: sombreado desde la izquierda, bordes iluminados y ventanas."""
+    rows = np.nonzero(m.any(1))[0]
+    for y in rows:
+        xs = np.nonzero(m[y])[0]
+        x0, x1 = xs.min(), xs.max()
+        if light_dir_split is None:
+            t = (xs - x0) / max(1, x1 - x0)
+            shade = 1.25 - .45 * t
+        else:  # pirámide: cara izquierda iluminada, derecha en sombra
+            shade = np.where(xs < light_dir_split, 1.3, .72)
+        mid_rgb[y, xs] = base * shade[:, None]
+        if y % 3 == 2:
+            mid_rgb[y, xs] *= .8                                         # líneas de pisos
+    up = m & ~np.roll(m, 1, 0)
+    left = m & ~np.roll(m, 1, 1)
+    diag = m & ~np.roll(np.roll(m, 1, 0), 1, 1) & ~up
+    mid_rgb[left] = base + np.array([28, 16, 18])
+    mid_rgb[up | diag] = base + np.array([72, 36, 30])                   # bordes con luz del horizonte
+    mid[m] = 1
+
+
 x = -3
-bi = 0
+PYR_C, PYR_TOP, PYR_HALF0 = 146, 30, 4
 while x < 250:
     bw = random.randint(9, 22)
     top = random.randint(52, 96)
-    if 132 <= x <= 150 and BILL is None:
-        bw, top = 26, 44
-        BILL = (x + 4, top + 6, 18, 30)
+    if x + bw > PYR_C - 26 and x < PYR_C + 26:   # delante de la pirámide: solo edificios bajos
+        top = max(top, 88)
+    kind = random.choice(KINDS)
     base = np.array(random.choice([(14, 12, 20), (18, 15, 24), (12, 11, 17)]), float)
-    mid[top:, x:x + bw] = 1
-    mid_rgb[top:, max(0, x):x + bw] = base
-    for fy in range(top + 2, H, 3):                                      # líneas de pisos
-        mid_rgb[fy, max(0, x):x + bw] = base * .75
-    shade = np.linspace(1.25, .8, bw)[None, :, None]                     # luz desde la izquierda
-    xs0 = max(0, x)
-    mid_rgb[top:, xs0:x + bw] *= shade[:, xs0 - x:xs0 - x + mid_rgb[top:, xs0:x + bw].shape[1]]
-    if random.random() < .4:                                             # retranqueo en el techo
-        sw = max(3, bw // 2); sx0 = x + random.randint(1, max(1, bw - sw - 1))
-        mid[top - 4:top, max(0, sx0):sx0 + sw] = 1
-        mid_rgb[top - 4:top, max(0, sx0):sx0 + sw] = base
-        mid_rgb[top - 4, max(0, sx0):sx0 + sw] = base + np.array([60, 30, 28])
-    mid_rgb[top, max(0, x):x + bw] = base + np.array([70, 34, 30])      # borde superior iluminado
-    if x >= 0:
-        mid_rgb[top:, x] = base + np.array([26, 14, 16])               # canto
-    if random.random() < .45:                                            # antena
-        ax = x + random.randint(2, max(3, bw - 3))
-        mid[top - 6:top, ax] = 1; mid_rgb[top - 6:top, ax] = base
-    if random.random() < .35:                                            # tira de luz vertical
-        sx = x + random.randint(2, max(3, bw - 3))
+    m = silhouette(kind, x, bw, top, flip=random.random() < .5)
+    paint_building(m, base)
+    ys, xs = np.nonzero(m)
+    if random.random() < .35 and len(xs):                                # tira de luz vertical
+        sx = int(np.median(xs))
         col = random.choice([(70, 170, 190), (190, 70, 140), (200, 140, 70)])
-        mid_rgb[top + 3:H - 6, sx] = lerp(base, np.array(col), .55)
-    for wy in range(top + 3, H, 3):
-        for wx in range(x + 2, x + bw - 1, 2):
-            if 0 <= wx < W and not (BILL and BILL[0] - 1 <= wx < BILL[0] + BILL[2] + 1 and BILL[1] - 1 <= wy < BILL[1] + BILL[3] + 1):
-                r = random.random()
-                if r < .11:
-                    mid_rgb[wy, wx] = lerp(base, np.array([230, 150, 80]), random.uniform(.35, .85))
-                elif r < .125:
-                    mid_rgb[wy, wx] = lerp(base, np.array([120, 210, 230]), .6)
-                elif r < .14:
-                    flick[wy, wx] = (235, 170, 100, 255)
+        col_rows = np.nonzero(m[:, sx])[0]
+        sel = col_rows[(col_rows > col_rows.min() + 3) & (col_rows < H - 6)]
+        mid_rgb[sel, sx] = lerp(base, np.array(col), .55)
+    inner = m & np.roll(m, 1, 1) & np.roll(m, -1, 1) & np.roll(m, 1, 0) & np.roll(m, -2, 0)
+    for wy, wx in zip(*np.nonzero(inner & (yy % 3 == 0) & (xx % 2 == 0))):
+        r = random.random()
+        if r < .11:
+            mid_rgb[wy, wx] = lerp(base, WIN_WARM, random.uniform(.35, .85))
+        elif r < .125:
+            mid_rgb[wy, wx] = lerp(base, WIN_CYAN, .6)
+        elif r < .14:
+            flick[wy, wx] = (235, 170, 100, 255)
     x += bw + random.randint(0, 3)
+
+# --- arcología piramidal (detrás de los edificios bajos, delante del resto)
+pyr = np.zeros((H, W), bool)
+for y in range(PYR_TOP, H):
+    step = (y - PYR_TOP) // 5
+    half = PYR_HALF0 + step * 3 + (y - PYR_TOP) % 5 // 3
+    pyr[y, max(0, PYR_C - half):min(W, PYR_C + half)] = True
+pyr[PYR_TOP - 12:PYR_TOP, PYR_C - 1:PYR_C + 1] = True                  # aguja
+pyr[PYR_TOP - 4:PYR_TOP, PYR_C - 2:PYR_C + 2] = True
+front = mid.astype(bool) & (yy >= 88)                                   # lo que queda delante
+pbase = np.array([20, 16, 26], float)
+saved = mid_rgb.copy(); saved_mid = mid.copy()
+paint_building(pyr, pbase, light_dir_split=PYR_C)
+for y in range(PYR_TOP, H):                                             # terrazas iluminadas
+    if (y - PYR_TOP) % 5 == 0:
+        xs = np.nonzero(pyr[y])[0]
+        mid_rgb[y, xs] = lerp(mid_rgb[y, xs], np.array([235, 140, 70]), np.where(xs < PYR_C, .55, .3)[:, None])
+    elif (y - PYR_TOP) % 5 == 2:                                        # bandas de ventanas
+        for wx in np.nonzero(pyr[y])[0][1:-1:2]:
+            r = random.random()
+            if r < .3:
+                mid_rgb[y, wx] = lerp(mid_rgb[y, wx], WIN_WARM, random.uniform(.4, .8))
+            elif r < .34:
+                flick[y, wx] = (235, 170, 100, 255)
+mid_rgb[PYR_TOP:H, PYR_C] = lerp(mid_rgb[PYR_TOP:H, PYR_C], np.array([120, 70, 60]), .5)  # arista central
+mid_rgb[front] = saved[front]; mid[front] = saved_mid[front]
+flick[front] = 0
+BILL = (PYR_C - 9, 52, 18, 30)
+bx_, by_ = BILL[0], BILL[1]
+flick[by_ - 1:by_ + BILL[3] + 1, bx_ - 1:bx_ + BILL[2] + 1] = 0
+
 # bruma sobre la parte baja de los edificios
 hz = np.clip((yy - 88) / 40, 0, 1)[..., None]
 mid_rgb = lerp(mid_rgb, np.array([90, 46, 44]), hz * .55)
@@ -384,6 +462,7 @@ for i, (hi, lo) in enumerate(SCREENS):
                 f'{image(full.astype(np.uint8))}</g>')
 body.append(rect(bx - 1, by - 1, bw_ + 2, 1, "#0c0b12") + rect(bx - 1, by + bh_, bw_ + 2, 1, "#0c0b12"))
 
+body.append(rect(PYR_C - 1, PYR_TOP - 13, 2, 1, "#ff3048", ' style="animation:red 2.2s infinite steps(1)"'))
 body.append(flight(16, .55, 26, 4, False, .9))   # auto volador medio
 body.append(fog_layer(96, 128, 47, (120, 64, 64), .3, 60, rev=True))
 
@@ -530,6 +609,6 @@ body.append(f'<rect x="{TX}" y="{TY + 10}" width="{len(TEXT) * 6 - 1}" height="1
 svg = (f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {W} {H}" width="{OUT_W}" height="{OUT_H}" '
        f'shape-rendering="crispEdges"><defs>{"".join(defs)}</defs><style>{"".join(css)}</style>'
        f'{rect(0, 0, W, H, "#05060c")}{"".join(body)}</svg>')
-out = ROOT / "assets" / "lucas-himelfarb-banner.svg"
+out = ROOT / "assets" / "lucas-himelfarb-banner-v2.svg"
 out.write_text(svg)
 print(f"{out} ({len(svg) // 1024} KB)")
