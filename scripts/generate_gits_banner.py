@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Genera assets/lucas-himelfarb-banner-v2.svg: una escena pixel art cyberpunk (Ghost in the
+"""Genera assets/lucas-himelfarb-banner-v3.svg: una escena pixel art cyberpunk (Ghost in the
 Shell / Blade Runner) con tu avatar integrado como personaje en primer plano.
 
 Uso:
@@ -466,6 +466,8 @@ body.append(rect(PYR_C - 1, PYR_TOP - 13, 2, 1, "#ff3048", ' style="animation:re
 body.append(flight(16, .55, 26, 4, False, .9))   # auto volador medio
 body.append(fog_layer(96, 128, 47, (120, 64, 64), .3, 60, rev=True))
 
+body.append(flight(12, .8, 19, 10, True, 1))      # auto volador cercano (pasa detrás del personaje)
+
 # ============================================================ 8. azotea en primer plano
 near = np.zeros((H, W)); near_rgb = np.zeros((H, W, 3))
 ROOF = 112
@@ -545,7 +547,6 @@ clip = nid("lc")
 defs.append(f'<clipPath id="{clip}"><rect x="{CX + LX0}" y="{CY + LY0}" width="{LX1 - LX0}" height="{LY1 - LY0}"/></clipPath>')
 body.append(f'<g clip-path="url(#{clip})"><g style="animation:glint 6s infinite ease-in-out">{image(gl.astype(np.uint8), CX, CY)}</g></g>')
 
-body.append(flight(12, .8, 19, 10, True, 1))      # auto volador cercano (pasa delante)
 
 # ============================================================ 10. lluvia
 css.append(f"@keyframes rain{{from{{transform:translate(0,0)}}to{{transform:translate(-8px,{H}px)}}}}")
@@ -609,6 +610,6 @@ body.append(f'<rect x="{TX}" y="{TY + 10}" width="{len(TEXT) * 6 - 1}" height="1
 svg = (f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {W} {H}" width="{OUT_W}" height="{OUT_H}" '
        f'shape-rendering="crispEdges"><defs>{"".join(defs)}</defs><style>{"".join(css)}</style>'
        f'{rect(0, 0, W, H, "#05060c")}{"".join(body)}</svg>')
-out = ROOT / "assets" / "lucas-himelfarb-banner-v2.svg"
+out = ROOT / "assets" / "lucas-himelfarb-banner-v3.svg"
 out.write_text(svg)
 print(f"{out} ({len(svg) // 1024} KB)")
