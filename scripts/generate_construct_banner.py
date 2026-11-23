@@ -2251,15 +2251,44 @@ cl_idle = hero("morpheus", PH_C, 0.0, .04, facing_right=True)
 lu = walk_frames(lambda ph, a: hero("neo", PH, ph, a), A_p)
 lu_idle = hero("neo", PH, 0.0, .04)
 CLX, LUX = 98, 146
-# sombras
-for x_ in (CLX, LUX):
-    body.append(f'<ellipse cx="{x_ + cl[0].width / 2}" cy="{FEET}" rx="8" ry="1.6" fill="#000" opacity=".22"/>')
+body.append(f'<ellipse cx="{CLX + cl[0].width / 2}" cy="{FEET}" rx="8" ry="1.6" fill="#000" opacity=".22"/>')
 body.append(protagonist(cl, cl_idle, CLX, cyc_c))
-LOOK0, LOOK1 = 16.6, 19.0                          # Lucas se da vuelta para mirarla
-css.append(f"@keyframes lturn{{0%,{pct(LOOK0):.3f}%{{transform:scaleX(1)}}{pct(LOOK0) + .001:.3f}%,{pct(LOOK1):.3f}%"
-           f"{{transform:scaleX(-1)}}{pct(LOOK1) + .001:.3f}%,100%{{transform:scaleX(1)}}}}")
-body.append(f'<g style="transform-origin:{LUX + lu[0].width / 2}px 0;animation:lturn {T}s infinite linear">'
-            f'{protagonist(lu, lu_idle, LUX, cyc_p, -cyc_p * .4)}</g>')
+
+# ------------------------------------------------ Lucas se queda de pie, distraído con la mujer de rojo
+# Camina junto a Claude; al verla venir de frente se frena (queda quieto en el mundo, así que la cámara,
+# que sigue a Claude, lo deja atrás); cuando ella pasa se da vuelta y la sigue con la mirada hasta que se
+# vuelve agente y todo se congela. Al descongelarse apura el paso y recupera su lugar junto a Claude.
+T_STOP = 17.2                                            # se frena
+T_TURN = APPEAR + (LUX + 10 + NEAR_SPEED * 0) / 1 * 0    # (se recalcula abajo)
+T_BACK = 31.6                                            # vuelve a su lugar
+# instante en que ella lo pasa: su x = WX0 + WV (t - APPEAR); la de él = LUX + NEAR_SPEED (t - T_STOP)
+T_TURN = (LUX - WX0 + WV * APPEAR - NEAR_SPEED * T_STOP) / (WV - NEAR_SPEED)
+LAG = NEAR_SPEED * (F0 - T_STOP)                         # cuánto queda atrás al congelarse
+V_CATCH = NEAR_SPEED + LAG / (T_BACK - F1)               # paso apurado para alcanzar a Claude
+A_f, cyc_f = gait_params(PH, V_CATCH, cadence=.95, amax=.5)
+lu_fast = walk_frames(lambda ph, a: hero("neo", PH, ph, a), A_f)
+lu_stand_l = hero("neo", PH, 0.0, .04)                   # parado mirándola venir
+lu_stand_r = hero("neo", PH, 0.0, .04, facing_right=True)   # se da vuelta y la sigue con la mirada
+css.append(f"@keyframes lucx{{0%,{pct(T_STOP):.3f}%{{transform:translateX(0)}}{pct(F0):.3f}%,{pct(F1):.3f}%"
+           f"{{transform:translateX({LAG:.2f}px)}}{pct(T_BACK):.3f}%,100%{{transform:translateX(0)}}}}")
+css.append(f"@keyframes lwalk{{0%,{pct(T_STOP) - .001:.3f}%{{opacity:1}}{pct(T_STOP):.3f}%,{pct(T_BACK) - .001:.3f}%{{opacity:0}}"
+           f"{pct(T_BACK):.3f}%,100%{{opacity:1}}}}")
+lstand_l = window(T_STOP, T_TURN)
+lstand_r = window(T_TURN, F1)
+lfast = window(F1, T_BACK)
+
+
+def frames_svg(frames, cyc, delay=0.0):
+    return "".join(f'<g opacity="{1 if i == 0 else 0}" style="animation:wk{i} {cyc:.3f}s {delay:.3f}s infinite steps(1)">'
+                   f'{image(f, LUX, FEET - f.height + 1, up=1)}</g>' for i, f in enumerate(frames))
+
+
+lucas_svg = (f'<ellipse cx="{LUX + lu[0].width / 2}" cy="{FEET}" rx="8" ry="1.6" fill="#000" opacity=".22"/>'
+             f'<g style="animation:lwalk {T}s infinite linear">{frames_svg(lu, cyc_p, -cyc_p * .4)}</g>'
+             f'<g opacity="0" style="{lstand_l}">{image(lu_stand_l, LUX, FEET - lu_stand_l.height + 1, up=1)}</g>'
+             f'<g opacity="0" style="{lstand_r}">{image(lu_stand_r, LUX, FEET - lu_stand_r.height + 1, up=1)}</g>'
+             f'<g opacity="0" style="{lfast}">{frames_svg(lu_fast, cyc_f)}</g>')
+body.append(f'<g style="animation:lucx {T}s infinite linear">{lucas_svg}</g>')
 
 # ============================================================ cámara más cerca
 scene_svg = "".join(body)
