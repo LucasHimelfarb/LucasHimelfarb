@@ -1018,8 +1018,10 @@ def street_tree(height, seed, young=True, parts=False):
     front = [(-.21, .62, .16, .085), (.21, .635, .15, .085),                      # masas laterales bajas
              (-.17, .36, .14, .11), (.16, .34, .13, .11), (.0, .44, .15, .11), (.08, .49, .12, .09),
              (-.07, .17, .12, .095), (.07, .1, .1, .085), (.15, .22, .1, .085)]   # copete
+    CY, CR = .7, .82                                          # la copa ocupa la parte de arriba: tronco libre largo
     def place(lst):
-        return [(cxt + mir * jit(x) * Ht, jit(y) * Ht, jit(rx, .015) * Ht, jit(ry, .012) * Ht) for x, y, rx, ry in lst]
+        return [(cxt + mir * jit(x) * CR * Ht, jit(y) * CY * Ht, jit(rx, .015) * CR * Ht, jit(ry, .012) * CY * Ht)
+                for x, y, rx, ry in lst]
     back, front = place(back), place(front)
     yy_, xx_ = np.mgrid[0:Ht, 0:Wt].astype(float)
     nz = np.random.default_rng(seed).random((Ht, Wt))
@@ -1043,15 +1045,15 @@ def street_tree(height, seed, young=True, parts=False):
     tr = np.zeros((Ht, Wt, 4))
     timg = Image.new("RGBA", (Wt, Ht), (0, 0, 0, 0)); td = ImageDraw.Draw(timg)
     base_x = cxt + mir * rt.uniform(-.02, .02) * Ht
-    path = [(base_x, Ht - 1), (base_x + mir * .03 * Ht, .86 * Ht), (base_x - mir * .015 * Ht, .74 * Ht),
-            (cxt + mir * .02 * Ht, .62 * Ht)]
-    wid = [.085 * Ht, .07 * Ht, .062 * Ht, .052 * Ht]
+    path = [(base_x, Ht - 1), (base_x + mir * .025 * Ht, .82 * Ht), (base_x - mir * .015 * Ht, .64 * Ht),
+            (cxt + mir * .015 * Ht, .44 * Ht)]
+    wid = [.07 * Ht, .058 * Ht, .05 * Ht, .044 * Ht]
     for (p0, p1), (w0, w1) in zip(zip(path, path[1:]), zip(wid, wid[1:])):
         limb(td, p0, p1, w0, w1, BARK[1])
-    for ex, ey, w0 in ((-.15, .58, .04), (.15, .6, .035), (.02, .42, .04), (-.08, .3, .028), (.1, .32, .026)):
-        limb(td, path[-1], (cxt + mir * ex * Ht, ey * Ht), w0 * Ht, w0 * .45 * Ht, BARK[1])
-    td.polygon([(base_x - .07 * Ht, Ht - 1), (base_x + .07 * Ht, Ht - 1), (base_x + .04 * Ht, Ht - .05 * Ht),
-                (base_x - .04 * Ht, Ht - .05 * Ht)], fill=BARK[1])                       # raíces
+    for ex, ey, w0 in ((-.14, .42, .034), (.14, .43, .03), (.02, .3, .034), (-.07, .22, .024), (.08, .23, .022)):
+        limb(td, path[-1], (cxt + mir * ex * .82 * Ht, ey * Ht), w0 * Ht, w0 * .45 * Ht, BARK[1])
+    td.polygon([(base_x - .055 * Ht, Ht - 1), (base_x + .055 * Ht, Ht - 1), (base_x + .035 * Ht, Ht - .04 * Ht),
+                (base_x - .035 * Ht, Ht - .04 * Ht)], fill=BARK[1])                      # raíces
     ta = np.asarray(timg, dtype=float)
     tm = ta[..., 3] > 0
     left = tm & ~np.roll(tm, 1, 1)
@@ -1109,7 +1111,7 @@ def bake(im, x0, base_y):
     near[ty[ok], tx[ok], 3] = 255
 
 
-FAR_TREE_H = 56                                              # ~5 m a la distancia de la vereda de enfrente
+FAR_TREE_H = 66                                              # ~5 m a la distancia de la vereda de enfrente
 for i_, tx_ in enumerate((296, 430, 560)):                # lejos de la pantalla LED y de la esquina
     t_im = street_tree(FAR_TREE_H, 50 + i_)
     bake(t_im, tx_ - t_im.width / 2, AVE_TOP + 2)
@@ -1118,19 +1120,7 @@ for bi_ in (0, 5):                                           # macetones a los l
     for side_ in (-1, 1):
         pl = planter(7, 70 + bi_ * 2 + side_)
         bake(pl, bx_ + bw_ / 2 + side_ * 23 - pl.width / 2, AVE_TOP + 1)
-# canteros de tierra con rejita para los árboles de nuestra vereda (en el piso: toman la perspectiva)
-OUR_TREES = (24, 458, 612)
-for tx_ in OUR_TREES:
-    for x_ in range(tx_ - 7, tx_ + 8):
-        xx_ = x_ % TW
-        near[GROUND + 3:GROUND + 7, xx_, :3] = (66, 54, 44)
-        if (x_ - tx_) % 3 == 0:
-            near[GROUND + 3:GROUND + 7, xx_, :3] = (82, 68, 56)
-    for x_ in range(tx_ - 8, tx_ + 9):                       # rejita de hierro alrededor
-        near[GROUND + 2, x_ % TW, :3] = (30, 30, 32)
-        near[GROUND + 7, x_ % TW, :3] = (30, 30, 32)
-    for y_ in range(GROUND + 2, GROUND + 8):
-        near[y_, (tx_ - 8) % TW, :3] = (30, 30, 32); near[y_, (tx_ + 8) % TW, :3] = (30, 30, 32)
+OUR_TREES = (24, 458, 612)                                  # (los canteros van en la capa del árbol)
 
 # latas de gaseosa tiradas en la vereda de la cuadra larga (en el piso, toman la perspectiva)
 CANS = [(20, 101, (200, 30, 40)), (62, 104, (40, 90, 190)), (118, 99, (200, 30, 40)), (330, 103, (210, 210, 214)),
@@ -1999,7 +1989,24 @@ dump_svg = "".join(f'<g transform="translate({off} 0)">{dump_svg}</g>' for off i
 body.append(f'<g style="{track(TILE0, NEAR_SPEED, TW, 0, 0)}">{dump_svg}</g>')
 
 # ============================================================ árboles de nuestra vereda (capa propia)
-OUR_TREE_H = 92                                              # ~5 m junto al cordón (la copa sale del cuadro)
+OUR_TREE_H = 112                                             # ~5 m junto al cordón (la copa sale del cuadro)
+def tree_pit(cx_p, base_y):
+    """Cantero de tierra con rejita de hierro, en la misma capa que el árbol (no se despega del tronco)."""
+    g_ = (f'<polygon points="{cx_p - 8},{base_y - 2} {cx_p + 8},{base_y - 2} {cx_p + 9.5},{base_y + 3} {cx_p - 9.5},{base_y + 3}" '
+          f'fill="#423629"/>'
+          f'<polygon points="{cx_p - 6.5},{base_y - 1} {cx_p + 6.5},{base_y - 1} {cx_p + 7.5},{base_y + 2} {cx_p - 7.5},{base_y + 2}" '
+          f'fill="#56473a"/>')
+    for k_ in range(-6, 7, 3):                                 # terrones / hojas secas
+        g_ += f'<rect x="{cx_p + k_}" y="{base_y}" width="1" height="1" fill="#6a5a46"/>'
+    g_ += (f'<polyline points="{cx_p - 9.5},{base_y + 3} {cx_p - 8},{base_y - 2} {cx_p + 8},{base_y - 2} {cx_p + 9.5},{base_y + 3}" '
+           f'fill="none" stroke="#1e1e20" stroke-width=".8"/>'
+           f'<line x1="{cx_p - 9.5}" y1="{base_y + 3}" x2="{cx_p + 9.5}" y2="{base_y + 3}" stroke="#2c2c2e" stroke-width=".8"/>')
+    for k_ in (-8, -4, 0, 4, 8):                               # barrotes de la rejita
+        g_ += f'<line x1="{cx_p + k_ * 1.08}" y1="{base_y - 4}" x2="{cx_p + k_ * 1.15}" y2="{base_y + 3}" stroke="#1e1e20" stroke-width=".6"/>'
+    g_ += f'<line x1="{cx_p - 8.7}" y1="{base_y - 4}" x2="{cx_p + 8.7}" y2="{base_y - 4}" stroke="#1e1e20" stroke-width=".7"/>'
+    return g_
+
+
 css.append("@keyframes sway{0%,100%{transform:rotate(-.9deg)}50%{transform:rotate(1.1deg)}}"
            "@keyframes rustle{0%,100%{transform:translate(0,0)}33%{transform:translate(.6px,-.3px)}66%{transform:translate(-.4px,.2px)}}"
            "@keyframes flA{0%,49.9%{opacity:1}50%,100%{opacity:0}}@keyframes flB{0%,49.9%{opacity:0}50%,100%{opacity:1}}")
@@ -2010,7 +2017,7 @@ for i_, tx_ in enumerate(OUR_TREES):
     ox_, oy_ = x0_t + px_c, y0_t + py_c                     # pivote: donde el tronco se abre en ramas
     sw_d, sw_dl = 4.2 + i_ * .7, -i_ * 1.3
     swing = f'transform-origin:{ox_:.1f}px {oy_:.1f}px;animation:sway {sw_d:.1f}s {sw_dl:.1f}s infinite ease-in-out'
-    trees_svg += (f'<g style="{swing}">{image(cb_i, x0_t, y0_t, up=1)}</g>'
+    trees_svg += (f'<g style="{swing}">{image(cb_i, x0_t, y0_t, up=1)}</g>' + tree_pit(tx_, GROUND + 4)
                   + image(trunk_i, x0_t, y0_t, up=1) +
                   f'<g style="{swing}"><g style="animation:rustle {1.7 + i_ * .3:.1f}s infinite ease-in-out">'
                   f'{image(cf_i, x0_t, y0_t, up=1)}'
