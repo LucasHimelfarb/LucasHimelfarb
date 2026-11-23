@@ -31,7 +31,8 @@ rng = np.random.default_rng(SEED)
 T = 32.0                 # ciclo maestro (s)
 F0, F1 = 20.0, 28.0      # congelado
 WALK = T - (F1 - F0)     # tiempo efectivo caminando
-NEAR_SPEED = 320 / WALK  # px/s de la fachada cercana (cámara que sigue a los protagonistas)
+TW = 2 * W               # ancho del tramo de fondo que se repite (una sola esquina: cuadra larga)
+NEAR_SPEED = TW / WALK   # px/s de la fachada cercana (cámara que sigue a los protagonistas, ~1 m/s)
 
 css = ["image{image-rendering:pixelated}"]
 defs, body = [], []
@@ -418,7 +419,7 @@ VEH_COLS = [(150, 36, 40), (52, 72, 110), (196, 194, 184), (36, 40, 44), (80, 98
 
 
 # fachada cercana + vereda: un tile de 320 px que se repite y se desplaza
-near = np.zeros((H, W, 4))
+near = np.zeros((H, TW, 4))
 AVE_TOP = 74                                                          # base de los edificios (vereda de enfrente)
 x = 0
 # piedra caliza clara, como los monumentos de Washington DC
@@ -433,26 +434,47 @@ while x < W:
     top = -random.randint(30, 110)                                    # muy altos: el techo queda fuera de cuadro
     kind = "lobby" if random.random() < .45 else "shop"
     aw = np.array(random.choice(AWN), float) if kind == "shop" and random.random() < .7 else None
-    yy_, xx_ = np.mgrid[0:AVE_TOP, x:min(W, x + bw)].astype(float)
+    yy_, xx_ = np.mgrid[0:AVE_TOP, x:min(TW, x + bw)].astype(float)
     face = facade(xx_ - x + .5 - (bw % 40) / 2, AVE_TOP - yy_ - .5, AVE_TOP - top, c, aw, 1.0, ("f", fi), kind)
     near[0:AVE_TOP, x:x + bw, :3] = face
     near[0:AVE_TOP, x:x + bw, 3] = 255
     near[0:AVE_TOP, x:x + 1, :3] = np.clip(c + 14, 0, 255)            # juntas entre edificios
-    near[0:AVE_TOP, min(W, x + bw) - 1, :3] = c * .78
+    near[0:AVE_TOP, min(TW, x + bw) - 1, :3] = c * .78
     blds.append((x, bw, top, c.copy(), aw, kind))
     fi += 1
     x += bw
+# segunda mitad del tramo (cuadra larga), con su propio generador para no alterar el resto
+_main_random = random
+random = random.Random(4242)
+while x < TW:
+    aw = None
+    bw = random.randint(46, 78)
+    bw = min(bw, TW - x) if TW - x < 40 else bw
+    c = np.array(random.choice(FRONT_PAL), float)
+    top = -random.randint(30, 110)
+    kind = "lobby" if random.random() < .45 else "shop"
+    aw = np.array(random.choice(AWN), float) if kind == "shop" and random.random() < .7 else None
+    yy_, xx_ = np.mgrid[0:AVE_TOP, x:min(TW, x + bw)].astype(float)
+    face = facade(xx_ - x + .5 - (bw % 40) / 2, AVE_TOP - yy_ - .5, AVE_TOP - top, c, aw, 1.0, ("f", fi), kind)
+    near[0:AVE_TOP, x:x + bw, :3] = face
+    near[0:AVE_TOP, x:x + bw, 3] = 255
+    near[0:AVE_TOP, x:x + 1, :3] = np.clip(c + 14, 0, 255)
+    near[0:AVE_TOP, min(TW, x + bw) - 1, :3] = c * .78
+    blds.append((x, bw, top, c.copy(), aw, kind))
+    fi += 1
+    x += bw
+random = _main_random
 # avenida entre la vereda de enfrente y la nuestra, con bocacalle en la esquina
 GX, GW, VY = 168, 92, 60                                              # hueco de la bocacalle
 GC = GX + GW / 2
 near[:AVE_TOP, GX:GX + GW, 3] = 0
-cv = Image.new("RGBA", (W, H), (0, 0, 0, 0)); cd = ImageDraw.Draw(cv)
-cd.rectangle([0, AVE_TOP, W, AVE_TOP + 3], fill=(150, 158, 140, 255))      # vereda de enfrente
-cd.line([(0, AVE_TOP + 3), (W, AVE_TOP + 3)], fill=(190, 196, 180, 255))  # cordón
-cd.rectangle([0, AVE_TOP + 4, W, GROUND - 1], fill=(64, 70, 68, 255))     # calzada
-for lx in range(0, W, 12):                                                # línea divisoria
+cv = Image.new("RGBA", (TW, H), (0, 0, 0, 0)); cd = ImageDraw.Draw(cv)
+cd.rectangle([0, AVE_TOP, TW, AVE_TOP + 3], fill=(150, 158, 140, 255))      # vereda de enfrente
+cd.line([(0, AVE_TOP + 3), (TW, AVE_TOP + 3)], fill=(190, 196, 180, 255))  # cordón
+cd.rectangle([0, AVE_TOP + 4, TW, GROUND - 1], fill=(64, 70, 68, 255))     # calzada
+for lx in range(0, TW, 12):                                                # línea divisoria
     cd.line([(lx, AVE_TOP + 11), (lx + 6, AVE_TOP + 11)], fill=(210, 204, 150, 255))
-cd.line([(0, GROUND - 1), (W, GROUND - 1)], fill=(44, 50, 48, 255))
+cd.line([(0, GROUND - 1), (TW, GROUND - 1)], fill=(44, 50, 48, 255))
 # semáforo en la esquina
 sx_ = GX + GW + 2
 cd.rectangle([sx_, 40, sx_ + 1, GROUND], fill=(30, 36, 32, 255))
@@ -635,13 +657,13 @@ sr = random.Random(1212)
 near[GROUND:, :, 3] = 255
 SW_ROWS = [GROUND + 3, H]                                               # una sola fila: losas de toda la profundidad
 SLAB = 30                                                               # ancho de losa (~1.5 m)
-grain = srng.normal(0, 1, (H, W))
+grain = srng.normal(0, 1, (H, TW))
 SW_OFF = 7                                                              # juntas alineadas: grilla, no ladrillo
 for r0, r1 in zip(SW_ROWS, SW_ROWS[1:]):
     off_ = SW_OFF
-    for sx0 in range(-off_, W, SLAB):
+    for sx0 in range(-off_, TW, SLAB):
         base_c = np.array([186, 186, 178]) + sr.uniform(-12, 10) + np.array([sr.uniform(-3, 3), 0, sr.uniform(-4, 2)])
-        x0_, x1_ = max(0, sx0), min(W, sx0 + SLAB)
+        x0_, x1_ = max(0, sx0), min(TW, sx0 + SLAB)
         if x1_ <= x0_:
             continue
         blk = np.broadcast_to(base_c, (r1 - r0, x1_ - x0_, 3)).copy()
@@ -651,7 +673,7 @@ for r0, r1 in zip(SW_ROWS, SW_ROWS[1:]):
         near[r0:r1, x0_:x1_, :3] = blk
         if sx0 >= 0:                                                    # junta vertical: sombra + borde claro
             near[r0:r1, sx0, :3] = (100, 104, 98)
-            if sx0 + 1 < W:
+            if sx0 + 1 < TW:
                 near[r0:r1, sx0 + 1, :3] = np.minimum(near[r0:r1, sx0 + 1, :3] + 16, 255)
         if sr.random() < .22:                                           # grieta
             cxk, cyk = sr.uniform(x0_ + 3, max(x0_ + 4, x1_ - 3)), r0 + 1
@@ -663,15 +685,15 @@ for r0, r1 in zip(SW_ROWS, SW_ROWS[1:]):
 near[GROUND, :, :3] = (46, 50, 48)
 near[GROUND + 1, :, :3] = (214, 214, 206)
 near[GROUND + 2, :, :3] = (168, 170, 164) + grain[GROUND + 2, :, None] * 6
-for gx_ in range(0, W, 47):
+for gx_ in range(0, TW, 47):
     near[GROUND + 1:GROUND + 3, gx_, :3] = (120, 122, 118)
 # chicles y manchas
 for _ in range(90):
-    gx_, gy_ = sr.randrange(0, W), sr.randrange(GROUND + 4, H)
+    gx_, gy_ = sr.randrange(0, TW), sr.randrange(GROUND + 4, H)
     near[gy_, gx_, :3] = np.array(near[gy_, gx_, :3]) * .7
 for _ in range(5):
-    ox_, oy_, rw = sr.randrange(0, W), sr.randrange(GROUND + 4, GROUND + 12), sr.randrange(4, 9)
-    yy_o, xx_o = np.ogrid[GROUND + 3:H, 0:W]
+    ox_, oy_, rw = sr.randrange(0, TW), sr.randrange(GROUND + 4, GROUND + 12), sr.randrange(4, 9)
+    yy_o, xx_o = np.ogrid[GROUND + 3:H, 0:TW]
     m_o = ((xx_o - ox_) / rw) ** 2 + ((yy_o - oy_) / (rw * .35)) ** 2 < 1
     near[GROUND + 3:H, :, :3][m_o] *= .86
 
@@ -691,7 +713,7 @@ def diamond_plate(x0, y0, w, h):
 
 
 def manhole(cx_, cy_, rx, ry):
-    yy_m, xx_m = np.ogrid[0:H, 0:W]
+    yy_m, xx_m = np.ogrid[0:H, 0:TW]
     m_ = ((xx_m - cx_) / rx) ** 2 + ((yy_m - cy_) / ry) ** 2
     near[(m_ < 1) & (yy_m >= GROUND + 3), :3] = (88, 90, 88)
     ring = (m_ >= .7) & (m_ < 1) & (yy_m >= GROUND + 3)
@@ -711,7 +733,7 @@ manhole(120, GROUND + 7, 6, 2.4)
 #  - sendas para cruzarla en la vereda de enfrente y en la nuestra: rayas a lo largo de la calle;
 #  - sendas para cruzar la avenida a cada lado de la bocacalle (WR < |X| < WC): rayas a lo largo
 #    de la avenida, apiladas en profundidad; la línea divisoria se corta en el cruce.
-xs_all = np.arange(W) + .5
+xs_all = np.arange(TW) + .5
 XW_END = H + 50                                           # fin de las rayas de nuestra senda (antes de la franja negra)
 for y_ in range(AVE_TOP + 4, H):
     f_ = (y_ + .5 - VPY) / HC
@@ -754,34 +776,46 @@ for _ in range(3):                                                      # postes
     px = random.choice([random.randrange(10, GX - 12), random.randrange(GX + GW + 8, W - 10)])
     near[30:GROUND + 2, px:px + 2, :3] = (40, 48, 44); near[30:GROUND + 2, px:px + 2, 3] = 255
     near[30:32, px - 4:px + 6, :3] = (40, 48, 44); near[30:32, px - 4:px + 6, 3] = 255
+for px in (372, 468, 566):                                              # postes de la cuadra nueva
+    near[30:GROUND + 2, px:px + 2, :3] = (40, 48, 44); near[30:GROUND + 2, px:px + 2, 3] = 255
+    near[30:32, px - 4:px + 6, :3] = (40, 48, 44); near[30:32, px - 4:px + 6, 3] = 255
 
 
+# latas de gaseosa tiradas en la vereda de la cuadra larga (en el piso, toman la perspectiva)
+CANS = [(20, 101, (200, 30, 40)), (62, 104, (40, 90, 190)), (118, 99, (200, 30, 40)), (330, 103, (210, 210, 214)),
+        (402, 100, (40, 140, 70)), (455, 105, (200, 30, 40)), (512, 101, (210, 210, 214)), (602, 99, (40, 90, 190))]
+for cx_c, cy_c, cc in CANS:
+    near[cy_c + 2, cx_c:cx_c + 5, :3] = np.array(near[cy_c + 2, cx_c:cx_c + 5, :3]) * .72   # sombra
+    near[cy_c:cy_c + 2, cx_c:cx_c + 4, :3] = cc                         # cuerpo de la lata (acostada)
+    near[cy_c, cx_c:cx_c + 4, :3] = np.minimum(np.array(cc) + 60, 255)  # brillo
+    near[cy_c:cy_c + 2, cx_c + 4, :3] = (210, 212, 216)                 # tapa de aluminio
+    near[cy_c + 1, cx_c + 4, :3] = (150, 152, 156)
 near_rgb = posterize(np.clip(near[..., :3], 0, 255), 64, 6)
 near_full = np.dstack([near_rgb, near[..., 3]]).astype(np.uint8)
 near_im = Image.fromarray(near_full, "RGBA")           # (completo, para inspección)
 top_arr = near_full.copy(); top_arr[GROUND:, :, 3] = 0
-tile = image(Image.fromarray(top_arr, "RGBA"), up=1) + image(Image.fromarray(top_arr, "RGBA"), x=-W, up=1)
+tile = image(Image.fromarray(top_arr, "RGBA"), up=1) + image(Image.fromarray(top_arr, "RGBA"), x=-TW, up=1)
 # franja de nuestra vereda (en coordenadas de suelo), que se dibuja aparte con perspectiva
 band_im = Image.fromarray(near_full[GROUND:], "RGBA")
 # fase del tile: al congelar, la senda queda justo debajo de Claude y Lucas (x ≈ 93..185)
 TILE0 = 93 - GX - NEAR_SPEED * F0
-body.append(f'<g style="{track(TILE0, NEAR_SPEED, W, 0, 0)}">{tile}</g>')
+body.append(f'<g style="{track(TILE0, NEAR_SPEED, TW, 0, 0)}">{tile}</g>')
 
 # Vereda con perspectiva: cada fila del suelo se escala por f(y) = (y - horizonte) / (cordón - horizonte)
 # alrededor del centro de la pantalla y se desplaza f(y) veces más rápido (paralaje). Así las juntas y
 # la senda fugan hacia el centro y se abren hacia abajo, como si la vereda siguiera bajo el cuadro.
 # El ciclo cierra igual: en cada fila el desplazamiento por vuelta es exactamente un tile escalado.
 band_id = nid("band")
-defs.append(f'<g id="{band_id}">{image(band_im, 0, 0, up=1)}{image(band_im, -W, 0, up=1)}</g>')
+defs.append(f'<g id="{band_id}">{image(band_im, 0, 0, up=1)}{image(band_im, -TW, 0, up=1)}</g>')
 band_rows = []
 for r_ in range(H - GROUND):
     y_r = GROUND + r_
     f_r = (y_r + .5 - HORIZON) / (GROUND + .5 - HORIZON)
     cid = nid("br")
-    defs.append(f'<clipPath id="{cid}"><rect x="-{W}" y="{y_r}" width="{3 * W}" height="1.02"/></clipPath>')
+    defs.append(f'<clipPath id="{cid}"><rect x="-{TW}" y="{y_r}" width="{3 * TW}" height="1.02"/></clipPath>')
     band_rows.append(f'<g clip-path="url(#{cid})"><g transform="translate({W / 2 * (1 - f_r):.3f} 0) scale({f_r:.4f} 1)">'
-                     f'<g style="{track(TILE0, NEAR_SPEED, W, 0, GROUND)}"><use href="#{band_id}"/>'
-                     f'<use href="#{band_id}" x="{W}"/></g></g></g>')
+                     f'<g style="{track(TILE0, NEAR_SPEED, TW, 0, GROUND)}"><use href="#{band_id}"/>'
+                     f'<use href="#{band_id}" x="{TW}"/></g></g></g>')
 body.append("".join(band_rows))
 
 # ============================================================ figuras (dibujadas con PIL)
@@ -1040,12 +1074,12 @@ def tile_g(t):                                         # desplazamiento (sin mó
 
 
 TURN_COL = (196, 150, 40)                              # un taxi amarillo, para que se distinga
-T_IN, T_TURN, T_GONE = 11.6, 14.6, 19.6
+T_IN, T_TURN, T_GONE = 15.0, 17.0, 19.8                 # con la esquina a la vista
 LANE_Y = NEAR_LANE                                     # carril cercano (va hacia la derecha)
 X_LANE = WR * .5                                       # carril de ida de la calle transversal
 z_a = F * HC / (LANE_Y - VPY)
 x_turn = VPX + F * X_LANE / z_a                        # en coordenadas del tile
-scr_turn = (tile_g(T_TURN) + x_turn) % W
+scr_turn = (tile_g(T_TURN) + x_turn) % TW
 x_start = -40 + x_turn - scr_turn + NEAR_SPEED * (T_TURN - T_IN)
 side = vehicle_side(76, TURN_COL, "taxi").transpose(Image.FLIP_LEFT_RIGHT)
 rear = vehicle_end(24, TURN_COL, rear=True)
@@ -1069,10 +1103,10 @@ css.append(f"@keyframes {kb}{{{''.join(frames)}}}")
 turn_svg = (f'<g style="animation:{ka} {T}s infinite linear">{image(side, -side.width // 2, -side.height, up=1)}</g>'
             f'<g style="animation:{kb} {T}s infinite linear">{image(rear, -rear.width // 2, -rear.height, up=1)}</g>')
 # va solo en la copia del tile que está en pantalla durante el giro (sin vuelta del tile en esa ventana)
-assert int(tile_g(T_IN) // W) == int(tile_g(T_GONE) // W), "el tile da la vuelta durante el giro del taxi"
-copy_off = round((scr_turn - (tile_g(T_TURN) % W) - x_turn) / W) * W
+assert int(tile_g(T_IN) // TW) == int(tile_g(T_GONE) // TW), "el tile da la vuelta durante el giro del taxi"
+copy_off = round((scr_turn - (tile_g(T_TURN) % TW) - x_turn) / TW) * TW
 turn_svg = f'<g transform="translate({copy_off} 0)">{turn_svg}</g>'
-body.append(f'<g style="{track(TILE0, NEAR_SPEED, W, 0, 0)}"><g style="{WALK_VIS}">{turn_svg}</g></g>')
+body.append(f'<g style="{track(TILE0, NEAR_SPEED, TW, 0, 0)}"><g style="{WALK_VIS}">{turn_svg}</g></g>')
 
 # ------------------------------------------------ gente caminando por las veredas de la calle transversal
 PREF, PH_Z0 = 18, 8.2                                    # alto del sprite y alto de una persona a la distancia z0
@@ -1119,14 +1153,14 @@ for i in range(10):
     spr = sprite_group(fr, 0, 0, step=.5, freeze_img=frozen(fr[0]), flip=flip)
     peds.append(f'<g style="transform-origin:0 0;animation:{k} {T}s infinite linear">{spr}</g>')
 cross_peds = "".join(peds)
-cross_peds += f'<g transform="translate({-W} 0)">{cross_peds}</g>'
-body.append(f'<g style="{track(TILE0, NEAR_SPEED, W, 0, 0)}">{cross_peds}</g>')
+cross_peds += f'<g transform="translate({-TW} 0)">{cross_peds}</g>'
+body.append(f'<g style="{track(TILE0, NEAR_SPEED, TW, 0, 0)}">{cross_peds}</g>')
 
 # tamaño real respecto de la gente (persona ~37 px = 1.75 m): auto ~4.6 m de largo
 CSPAN, CMARG = W + 320, 160
 LANES = [  # (base y, sentido, k: vueltas por ciclo, vehículos [(tipo, largo)])
     (AVE_TOP + 11, -1, -1, [("sedan", 64), ("bus", 150), ("van", 60), ("sedan", 66)]),
-    (NEAR_LANE, 1, 2, [("sedan", 76), ("van", 72), ("sedan", 78), ("sedan", 74)]),
+    (NEAR_LANE, 1, 3, [("sedan", 76), ("van", 72), ("sedan", 78), ("sedan", 74)]),
 ]
 
 
@@ -1276,15 +1310,65 @@ scene = (f'<g style="{WALK_VIS}">{image(pcar, PCX, p_y, up=1)}{image(vcar, VCX, 
          f'{image(sign, SX, SY, up=1)}</g>'
          f'<g opacity="0" style="{FRZ_VIS}">{image(frozen(pcar), PCX, p_y, up=1)}{image(frozen(vcar), VCX, v_y, up=1)}'
          f'{image(frozen(ofr[0]), o_x, o_y, up=1)}{image(frozen(sign), SX, SY, up=1)}</g>')
-patrol = "".join(f'<g transform="translate({off} 0)">{scene}</g>' for off in (0, -W, -2 * W))
-body.append(f'<g style="{track(TILE0, NEAR_SPEED, W, 0, 0)}">{patrol}</g>')
+patrol = "".join(f'<g transform="translate({off} 0)">{scene}</g>' for off in (0, -TW))
+body.append(f'<g style="{track(TILE0, NEAR_SPEED, TW, 0, 0)}">{patrol}</g>')
+
+# ============================================================ contenedor de basura desbordado (cuadra larga)
+def dumpster(length):
+    """Contenedor de carga frontal (de los que levanta el camión), con la tapa abierta y desbordado de bolsas."""
+    S_ = 4
+    L_ = length * S_
+    Hb_ = length * .55 * S_                                  # caja (~1.1 m de alto para ~1.9 m de largo)
+    pad = int(Hb_ * .7)                                      # lugar para la montaña de bolsas
+    im_ = Image.new("RGBA", (int(L_ + 14 * S_), int(Hb_ + pad + 2 * S_)), (0, 0, 0, 0)); d_ = ImageDraw.Draw(im_)
+    ox, oy = 4 * S_, pad
+    grn, grn_hi, grn_sh = (40, 78, 58), (66, 108, 82), (24, 48, 36)
+    d_.ellipse([ox - 2 * S_, oy + Hb_ - S_, ox + L_ + 6 * S_, oy + Hb_ + 2.4 * S_], fill=(0, 0, 0, 110))      # sombra
+    rng_b = random.Random(9)
+    bags = [(70, 74, 78), (24, 26, 30), (214, 214, 206), (36, 38, 42), (150, 154, 156), (20, 22, 26)]
+    for _ in range(26):                                      # bolsas que desbordan por arriba
+        bx_ = ox + rng_b.uniform(-.05, 1.0) * L_
+        by_ = oy + rng_b.uniform(-.62, .05) * Hb_
+        rw_, rh_ = rng_b.uniform(.12, .22) * L_, rng_b.uniform(.22, .36) * Hb_
+        col_b = rng_b.choice(bags)
+        d_.ellipse([bx_ - rw_ / 2, by_ - rh_ / 2, bx_ + rw_ / 2, by_ + rh_ / 2], fill=col_b)
+        d_.line([(bx_ - rw_ * .2, by_ - rh_ * .3), (bx_ + rw_ * .05, by_ - rh_ * .38)],
+                fill=tuple(min(255, c_ + 60) for c_ in col_b), width=S_)                                     # brillo del plástico
+        d_.polygon([(bx_ - S_, by_ - rh_ / 2), (bx_ + S_, by_ - rh_ / 2), (bx_, by_ - rh_ / 2 - 1.6 * S_)], fill=col_b)  # nudo
+    # caja: algo más ancha arriba, con nervaduras y guías para las horquillas
+    d_.polygon([(ox, oy), (ox + L_, oy), (ox + L_ - .04 * L_, oy + Hb_), (ox + .04 * L_, oy + Hb_)], fill=grn)
+    d_.rectangle([ox - S_, oy - S_, ox + L_ + S_, oy + S_], fill=grn_hi)                                       # borde superior
+    for rx_ in np.linspace(.12, .88, 5):
+        d_.rectangle([ox + rx_ * L_ - S_ * .6, oy + 2 * S_, ox + rx_ * L_ + S_ * .6, oy + Hb_ - 2 * S_], fill=grn_sh)
+    d_.rectangle([ox + .05 * L_, oy + .34 * Hb_, ox + .95 * L_, oy + .5 * Hb_], fill=grn_sh)                 # guías de las horquillas
+    d_.rectangle([ox + .06 * L_, oy + .36 * Hb_, ox + .94 * L_, oy + .4 * Hb_], fill=(14, 22, 18))
+    for ru in (.2, .8):                                                                                       # ruedas
+        d_.ellipse([ox + ru * L_ - 2 * S_, oy + Hb_ - 1.5 * S_, ox + ru * L_ + 2 * S_, oy + Hb_ + 2.5 * S_], fill=(16, 16, 18))
+    # tapas abiertas hacia atrás
+    d_.polygon([(ox + .02 * L_, oy - S_), (ox + .5 * L_, oy - S_), (ox + .46 * L_, oy - .5 * Hb_), (ox + .05 * L_, oy - .42 * Hb_)],
+               fill=(30, 34, 36))
+    d_.polygon([(ox + .5 * L_, oy - S_), (ox + .98 * L_, oy - S_), (ox + .9 * L_, oy - .36 * Hb_), (ox + .54 * L_, oy - .44 * Hb_)],
+               fill=(36, 40, 42))
+    for bx_, sc_ in ((ox + L_ + 5 * S_, 1.0), (ox - 2 * S_, .8)):                                            # bolsas en el piso
+        d_.ellipse([bx_ - 3.4 * S_ * sc_, oy + Hb_ - 6 * S_ * sc_, bx_ + 3.4 * S_ * sc_, oy + Hb_ + .6 * S_], fill=(26, 28, 32))
+        d_.line([(bx_ - S_, oy + Hb_ - 4.6 * S_ * sc_), (bx_ + .6 * S_, oy + Hb_ - 5 * S_ * sc_)], fill=(90, 94, 100), width=S_)
+    return _finish(im_, int(im_.width / S_), int(im_.height / S_))
+
+
+dump = dumpster(38)
+DX = 506                                                 # en la cuadra larga, contra el cordón
+DY = GROUND + 2 - dump.height
+dump_svg = (f'<g style="{WALK_VIS}">{image(dump, DX, DY, up=1)}</g>'
+            f'<g opacity="0" style="{FRZ_VIS}">{image(frozen(dump), DX, DY, up=1)}</g>')
+dump_svg = "".join(f'<g transform="translate({off} 0)">{dump_svg}</g>' for off in (0, -TW))
+body.append(f'<g style="{track(TILE0, NEAR_SPEED, TW, 0, 0)}">{dump_svg}</g>')
 
 # ============================================================ hidrante (capa propia)
 # Por delante de los autos y sus sombras, por detrás de la gente de la vereda (pies más abajo).
 hyd_svg = (f'<g style="{WALK_VIS}">{image(hyd, HX, HB - 14, up=1)}</g>'
            f'<g opacity="0" style="{FRZ_VIS}">{image(frozen(hyd), HX, HB - 14, up=1)}</g>')
-hyd_svg = "".join(f'<g transform="translate({off} 0)">{hyd_svg}</g>' for off in (0, -W))
-body.append(f'<g style="{track(TILE0, NEAR_SPEED, W, 0, 0)}">{hyd_svg}</g>')
+hyd_svg = "".join(f'<g transform="translate({off} 0)">{hyd_svg}</g>' for off in (0, -TW))
+body.append(f'<g style="{track(TILE0, NEAR_SPEED, TW, 0, 0)}">{hyd_svg}</g>')
 
 # ============================================================ multitud: dos carriles de vereda
 # Carril de enfrente: gente que va hacia la derecha. Carril cercano (el nuestro): gente que viene hacia
@@ -1298,7 +1382,7 @@ for i in range(11):
     k = random.choice([-1, 1, 1, 2, 2, 3])                     # (se sortea igual para no alterar la secuencia)
     near_lane = i % 3 == 2
     ly = LANE_NEAR if near_lane else LANE_FAR
-    k = -1 if near_lane else max(1, abs(k))
+    k = -1 if near_lane else (3 if abs(k) < 3 else 4)   # más rápido que la cámara, para no 'retroceder'
     h = round(PERSP_K * (ly - HORIZON) * h / 38)               # escala de la regla de perspectiva
     v = k * SPAN / WALK
     flip = k > 0                                   # los que van a la derecha miran a la derecha
@@ -1366,7 +1450,7 @@ def woman_in_red(h, frame):
 AGENT = dict(coat=(36, 40, 40), shirt=(226, 230, 222), skin=(214, 172, 140), hair=(28, 24, 20), tie=(8, 8, 8),
              shades=(6, 6, 8), earpiece=(200, 200, 190), pants=(30, 32, 34), coat_len=13.5)
 WY = LANE_FAR
-WH, APPEAR, TURN = round(PERSP_K * (WY - HORIZON)), 13.0, 18.6                                            # carril medio: entre la multitud y los protagonistas
+WH, APPEAR, TURN = round(PERSP_K * (WY - HORIZON)), 14.3, 18.6                                            # carril medio: entre la multitud y los protagonistas
 wred = [woman_in_red(WH, 0), woman_in_red(WH, 1)]
 wagt = [figure(WH, 0, AGENT), figure(WH, 1, AGENT)]
 # aparece de golpe (con un parpadeo) y cruza; al "mirá de nuevo" se vuelve agente
@@ -1378,7 +1462,7 @@ css.append(f"@keyframes wagt{{0%,{pct(TURN) - .001:.3f}%{{opacity:0}}{pct(TURN):
 w_red = f'<g opacity="0" style="animation:wred {T}s infinite linear">{sprite_group(wred, 0, -WH, step=.42, flip=True)}</g>'
 w_agt = (f'<g opacity="0" style="animation:wagt {T}s infinite linear">'
          f'{sprite_group(wagt, 0, -WH, step=.42, freeze_img=frozen(wagt[0]), flip=True)}</g>')
-WV, WX0 = 25, 50
+WV, WX0 = 47, -10                                   # más rápida que la cámara; pasa junto a Lucas ~17.6 s
 x_at = lambda t: WX0 + WV * (t - APPEAR)
 kw = nid("wk")
 css.append(f"@keyframes {kw}{{0%,{pct(APPEAR):.3f}%{{transform:translate({WX0}px,{WY}px)}}"
