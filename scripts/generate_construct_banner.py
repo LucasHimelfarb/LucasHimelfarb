@@ -982,22 +982,37 @@ for i in range(10):
     sd = (-1, 1)[i % 2]
     X = sd * (WR + 3.5 + prng.uniform(0, 6))
     away = prng.random() < .5
-    vz = ZR / WALK * prng.choice([1, 1, 2])            # vueltas enteras por ciclo: el loop cierra
+    vz = ZR / WALK * prng.choice([1, 1, 2])            # (se sortea igual para no alterar la secuencia aleatoria)
+    vz = ZR / WALK                                       # una vuelta por ciclo: paso de caminata para todos
     zst = prng.uniform(0, ZR)
     look = crowd_look(KINDS[(i * 5) % len(KINDS)], prng)
     fr = [figure(PREF, 0, look), figure(PREF, 1, look)]
     flip = (sd > 0) != away                              # de perfil, mirando hacia donde camina
-    kf = []
-    for t in np.arange(0, T + .001, .5):
-        e = eff(t)
-        q = (zst + vz * e) % ZR
+    FADE = 40.0                                          # tramo (en z) de aparición / desaparición
+
+    def pose(q):
         z = ZN + (q if away else ZR - q)
         s_ = PH_Z0 * Z0 / z / PREF
         x = VPX + F * X / z - fr[0].width * s_ / 2
         y = VPY + F * HC / z - PREF * s_
         th = 1 - np.exp(-(z - Z0) / 1100)
-        op = min(1.0, q / 14, (ZR - q) / 14) * max(0.0, 1 - th * 1.1)   # aparece/desaparece en los extremos
-        kf.append(f"{pct(t):.2f}%{{transform:translate({x:.1f}px,{y:.1f}px) scale({s_:.3f});opacity:{op:.2f}}}")
+        op = max(0.0, min(1.0, q / FADE, (ZR - q) / FADE)) * max(0.0, 1 - th * 1.1)
+        return x, y, s_, op
+
+    def frame_at(t, q, op=None):
+        x, y, s_, o = pose(q)
+        o = o if op is None else op
+        return (t, f"transform:translate({x:.1f}px,{y:.1f}px) scale({s_:.3f});opacity:{o:.2f}")
+
+    kf = [frame_at(t, (zst + vz * eff(t)) % ZR) for t in np.arange(0, T + .001, .5)]
+    # vuelta del tramo: corte exacto e invisible (sin interpolar de punta a punta)
+    e_w = (ZR - zst) / vz
+    while e_w < WALK:
+        t_w = e_w if e_w < F0 else e_w + (F1 - F0)
+        kf += [frame_at(t_w - .002, ZR - 1e-6, 0.0), frame_at(t_w + .002, 0.0, 0.0)]
+        e_w += ZR / vz
+    kf.sort(key=lambda f: f[0])
+    kf = [f"{pct(t):.3f}%{{{body_}}}" for t, body_ in kf]
     k = nid("cp")
     css.append(f"@keyframes {k}{{{''.join(kf)}}}")
     spr = sprite_group(fr, 0, 0, step=.5, freeze_img=frozen(fr[0]), flip=flip)
