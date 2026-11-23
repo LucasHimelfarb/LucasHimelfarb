@@ -633,7 +633,7 @@ reg[cm, :3] = corr[cm, :3]; reg[cm, 3] = 255
 srng = np.random.default_rng(1212)
 sr = random.Random(1212)
 near[GROUND:, :, 3] = 255
-SW_ROWS = [GROUND + 3, GROUND + 8, GROUND + 14, H]                     # filas de losas de igual profundidad (en perspectiva)
+SW_ROWS = [GROUND + 3, H]                                               # una sola fila: losas de toda la profundidad
 SLAB = 30                                                               # ancho de losa (~1.5 m)
 grain = srng.normal(0, 1, (H, W))
 SW_OFF = 7                                                              # juntas alineadas: grilla, no ladrillo
@@ -650,7 +650,7 @@ for r0, r1 in zip(SW_ROWS, SW_ROWS[1:]):
         blk *= (1.02 - .05 * vy)                                         # leve desgaste hacia el borde
         near[r0:r1, x0_:x1_, :3] = blk
         if sx0 >= 0:                                                    # junta vertical: sombra + borde claro
-            near[r0:r1, sx0, :3] = (118, 122, 116)
+            near[r0:r1, sx0, :3] = (100, 104, 98)
             if sx0 + 1 < W:
                 near[r0:r1, sx0 + 1, :3] = np.minimum(near[r0:r1, sx0 + 1, :3] + 16, 255)
         if sr.random() < .22:                                           # grieta
@@ -659,9 +659,6 @@ for r0, r1 in zip(SW_ROWS, SW_ROWS[1:]):
                 cyk += sr.uniform(.4, 1); cxk += sr.uniform(-1.1, 1.1)
                 if r0 <= int(cyk) < r1 and x0_ <= int(cxk) < x1_:
                     near[int(cyk), int(cxk), :3] = (124, 126, 120)
-    near[r0, :, :3] = (122, 126, 120)                                    # junta horizontal
-    if r0 + 1 < H:
-        near[r0 + 1, :, :3] = np.minimum(near[r0 + 1, :, :3] + 12, 255)
 # cordón de granito con el borde iluminado y la cuneta en sombra
 near[GROUND, :, :3] = (46, 50, 48)
 near[GROUND + 1, :, :3] = (214, 214, 206)
@@ -732,7 +729,11 @@ for y_ in range(AVE_TOP + 4, H):
         if AVE_TOP + 5 <= y_ < GROUND - 1:
             stop_av = (aX > WC + 5) & (aX <= WC + 5 + sw_)
             near[y_, stop_av, :3] = (236, 238, 228)
-    else:                                                # nuestra vereda
+    else:                                                # nuestra vereda: en coordenadas de suelo (escala del cordón)
+        f_ = (GROUND - VPY) / HC
+        Xr = (xs_all - GC) / f_
+        aX = np.abs(Xr)
+        road = aX <= WR
         near[y_, road, :3] = (70, 76, 74)
         if GROUND + 2 <= y_ < XW_END:
             stripe = zebra(Xr)
@@ -756,11 +757,32 @@ for _ in range(3):                                                      # postes
 
 
 near_rgb = posterize(np.clip(near[..., :3], 0, 255), 64, 6)
-near_im = Image.fromarray(np.dstack([near_rgb, near[..., 3]]).astype(np.uint8), "RGBA")
-tile = image(near_im, up=1) + image(near_im, x=-W, up=1)
+near_full = np.dstack([near_rgb, near[..., 3]]).astype(np.uint8)
+near_im = Image.fromarray(near_full, "RGBA")           # (completo, para inspección)
+top_arr = near_full.copy(); top_arr[GROUND:, :, 3] = 0
+tile = image(Image.fromarray(top_arr, "RGBA"), up=1) + image(Image.fromarray(top_arr, "RGBA"), x=-W, up=1)
+# franja de nuestra vereda (en coordenadas de suelo), que se dibuja aparte con perspectiva
+band_im = Image.fromarray(near_full[GROUND:], "RGBA")
 # fase del tile: al congelar, la senda queda justo debajo de Claude y Lucas (x ≈ 93..185)
 TILE0 = 93 - GX - NEAR_SPEED * F0
 body.append(f'<g style="{track(TILE0, NEAR_SPEED, W, 0, 0)}">{tile}</g>')
+
+# Vereda con perspectiva: cada fila del suelo se escala por f(y) = (y - horizonte) / (cordón - horizonte)
+# alrededor del centro de la pantalla y se desplaza f(y) veces más rápido (paralaje). Así las juntas y
+# la senda fugan hacia el centro y se abren hacia abajo, como si la vereda siguiera bajo el cuadro.
+# El ciclo cierra igual: en cada fila el desplazamiento por vuelta es exactamente un tile escalado.
+band_id = nid("band")
+defs.append(f'<g id="{band_id}">{image(band_im, 0, 0, up=1)}{image(band_im, -W, 0, up=1)}</g>')
+band_rows = []
+for r_ in range(H - GROUND):
+    y_r = GROUND + r_
+    f_r = (y_r + .5 - HORIZON) / (GROUND + .5 - HORIZON)
+    cid = nid("br")
+    defs.append(f'<clipPath id="{cid}"><rect x="-{W}" y="{y_r}" width="{3 * W}" height="1.02"/></clipPath>')
+    band_rows.append(f'<g clip-path="url(#{cid})"><g transform="translate({W / 2 * (1 - f_r):.3f} 0) scale({f_r:.4f} 1)">'
+                     f'<g style="{track(TILE0, NEAR_SPEED, W, 0, GROUND)}"><use href="#{band_id}"/>'
+                     f'<use href="#{band_id}" x="{W}"/></g></g></g>')
+body.append("".join(band_rows))
 
 # ============================================================ figuras (dibujadas con PIL)
 SKIN = [(232, 196, 166), (200, 150, 116), (160, 112, 82), (110, 76, 56), (240, 210, 186)]
