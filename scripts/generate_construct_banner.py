@@ -1131,7 +1131,19 @@ SUIT = [(58, 64, 62), (44, 50, 60), (84, 80, 72), (70, 76, 70), (36, 40, 40), (9
 
 
 GAIT_N = 8                                               # cuadros por ciclo de marcha
-GAIT_K = .6                                              # flexión máxima de rodilla en el balanceo (rad)
+GAIT_K = .5                                              # flexión máxima de rodilla en el balanceo (rad)
+
+
+def limb(d, p0, p1, w0, w1, col):
+    """Segmento de extremidad con volumen: trapecio que se afina de w0 a w1, con extremos redondeados."""
+    (x0, y0), (x1, y1) = p0, p1
+    dx_, dy_ = x1 - x0, y1 - y0
+    L_ = max(1e-6, np.hypot(dx_, dy_))
+    nx_, ny_ = -dy_ / L_, dx_ / L_
+    d.polygon([(x0 + nx_ * w0 / 2, y0 + ny_ * w0 / 2), (x1 + nx_ * w1 / 2, y1 + ny_ * w1 / 2),
+               (x1 - nx_ * w1 / 2, y1 - ny_ * w1 / 2), (x0 - nx_ * w0 / 2, y0 - ny_ * w0 / 2)], fill=col)
+    for (x, y), w_ in ((p0, w0), (p1, w1)):
+        d.ellipse([x - w_ / 2, y - w_ / 2, x + w_ / 2, y + w_ / 2], fill=col)
 
 
 def gait_legs(phase, legL, A):
@@ -1164,7 +1176,7 @@ def figure(h, frame, look, pose="walk", phase=None, amp=None):
     hip, foot = 12.5 * u, h - 1
     if phase is None:                                        # poses fijas heredadas
         phase = {0: .25, 1: 0.0}[frame] if pose == "walk" else 0.0
-    A = (amp if amp is not None else .42) if pose == "walk" else .05
+    A = (amp if amp is not None else .36) if pose == "walk" else .05
     legL = (foot - .6 * u) - hip
     th_l, sh_l = legL * .5, legL * .5
     legs = gait_legs(phase, legL, A)
@@ -1180,9 +1192,8 @@ def figure(h, frame, look, pose="walk", phase=None, amp=None):
         kx, ky = cx - th_l * np.sin(t_), hip + th_l * np.cos(t_)
         ax_, ay_ = kx - sh_l * np.sin(t_ - k_), ky + sh_l * np.cos(t_ - k_)
         ankles.append(ax_)
-        d.line([(cx, hip), (kx, ky)], fill=col, width=max(2, int(2.1 * lw * u)))
-        d.line([(kx, ky), (ax_, ay_)], fill=col, width=max(2, int(1.8 * lw * u)))
-        d.ellipse([kx - lw * u, ky - lw * u, kx + lw * u, ky + lw * u], fill=col)
+        limb(d, (cx, hip), (kx, ky), 2.9 * lw * u, 2.3 * lw * u, col)          # muslo
+        limb(d, (kx, ky), (ax_, ay_), 2.2 * lw * u, 1.5 * lw * u, col)         # pantorrilla
         fy_ = ay_ + .6 * u
         tilt = max(0.0, k_ - .3) * .8 * u                               # la punta baja al despegar
         if look.get("heels"):
@@ -1194,10 +1205,12 @@ def figure(h, frame, look, pose="walk", phase=None, amp=None):
             if look.get("sole"):
                 d.line([(ax_ - 1.6 * u, fy_ + tilt - .2 * u), (ax_ + .8 * u, fy_ - .2 * u)], fill=look["sole"], width=max(1, int(.4 * u)))
     stride = abs(ankles[0] - ankles[1]) / 2
+    d.rounded_rectangle([cx - 1.8 * u, hip - 1.6 * u, cx + 1.7 * u, hip + 1.3 * u], radius=max(1, int(.8 * u)),
+                        fill=pants)                                     # pelvis
     # brazo lejano (detrás del torso)
     arm_far = tuple(int(c * .62) for c in coat)
     arm_pose(d, cx + .3 * u, u, legs[0][0] * ARM_GAIN, arm_far, tuple(int(c * .8) for c in skin),
-             max(2, int((1.1 if fem else 1.4) * u)), look.get("short_sleeves"))
+             (1.6 if fem else 2.0) * u, look.get("short_sleeves"))
     # torso / abrigo
     coat_len = look.get("coat_len", 13.5) * u
     if look.get("backpack"):
@@ -1220,7 +1233,7 @@ def figure(h, frame, look, pose="walk", phase=None, amp=None):
         d.line([(cx - 1.5 * u, 5 * u), (cx - 1.7 * u, 8 * u)], fill=look["tie"], width=max(1, int(u * .6)))
     # brazo cercano (opuesto a la pierna cercana); el lejano se dibujó detrás del torso
     arm = tuple(int(c * .8 + 34) for c in coat)            # un poco más claro que el abrigo: se lee el balanceo
-    aw_ = max(2, int((1.15 if fem else 1.5) * u))
+    aw_ = (1.7 if fem else 2.1) * u
     hand_x, hand_y = arm_pose(d, cx, u, -legs[0][0] * ARM_GAIN, arm, skin, aw_, look.get("short_sleeves"))
     swing = hand_x - cx
     if look.get("bag"):
@@ -1277,7 +1290,7 @@ def figure(h, frame, look, pose="walk", phase=None, amp=None):
     return out_
 
 
-ARM_GAIN = .9                                            # balanceo de brazos respecto de la cadera
+ARM_GAIN = .55                                           # balanceo de brazos respecto de la cadera (contenido)
 
 
 def arm_pose(d, sx, u, alpha, col, skin, width, short_sleeves=False):
@@ -1287,12 +1300,12 @@ def arm_pose(d, sx, u, alpha, col, skin, width, short_sleeves=False):
     beta = alpha + .25 + .35 * max(0.0, alpha)            # el antebrazo acompaña hacia adelante
     hx_, hy_ = ex - fo_l * np.sin(beta), ey + fo_l * np.cos(beta)
     if short_sleeves:
-        d.line([(sx, 5 * u), (ex, ey)], fill=col, width=width + 1)
-        d.line([(ex, ey), (hx_, hy_)], fill=skin, width=width)
+        limb(d, (sx, 5 * u), (ex, ey), width * 1.25, width * 1.05, col)
+        limb(d, (ex, ey), (hx_, hy_), width * .95, width * .8, skin)
     else:
-        d.line([(sx, 5 * u), (ex, ey)], fill=col, width=width)
-        d.line([(ex, ey), (hx_, hy_)], fill=col, width=width)
-    d.ellipse([hx_ - .65 * u, hy_ - .5 * u, hx_ + .65 * u, hy_ + .7 * u], fill=skin)
+        limb(d, (sx, 5 * u), (ex, ey), width * 1.25, width * 1.05, col)       # brazo
+        limb(d, (ex, ey), (hx_, hy_), width * 1.0, width * .85, col)          # antebrazo
+    d.rectangle([hx_ - .7 * u, hy_ - .5 * u, hx_ + .6 * u, hy_ + .8 * u], fill=skin)   # mano (bloque, no '+')
     return hx_, hy_
 
 
@@ -1368,7 +1381,7 @@ def gait_params(h, world_speed, cadence=1.1):
     """
     legL = (h - 1 - .6 * h / 24) - 12.5 * h / 24
     step = max(1e-3, abs(world_speed)) * cadence / 2
-    A = float(np.clip(np.arcsin(min(.99, step / (2 * legL))), .12, .5))
+    A = float(np.clip(np.arcsin(min(.99, step / (2 * legL))), .12, .42))
     cyc = 2 * (2 * legL * np.sin(A)) / max(1e-3, abs(world_speed))
     return A, float(np.clip(cyc, .7, 2.2))
 
@@ -1874,8 +1887,8 @@ def woman_in_red(h, frame, phase=None, amp=.4):
         hxp = cx + sway
         kx, ky = hxp - legL * .5 * np.sin(t_), hip_w + legL * .5 * np.cos(t_)
         fx, fy = kx - legL * .5 * np.sin(t_ - k_), ky + legL * .5 * np.cos(t_ - k_) + 1.0 * u
-        d.line([(hxp, hip_w), (kx, ky)], fill=col, width=max(2, int(1.3 * u)))
-        d.line([(kx, ky), (fx, fy - 1.0 * u)], fill=col, width=max(1, int(1.0 * u)))
+        limb(d, (hxp, hip_w), (kx, ky), 2.1 * u, 1.6 * u, col)
+        limb(d, (kx, ky), (fx, fy - 1.0 * u), 1.5 * u, 1.0 * u, col)
         d.polygon([(fx - 1.2 * u, fy - .6 * u), (fx + .3 * u, fy - 1.2 * u), (fx + .5 * u, fy - .4 * u),
                    (fx - 1.2 * u, fy)], fill=(176, 12, 34))                                     # zapato
         d.line([(fx + .45 * u, fy - .5 * u), (fx + .5 * u, fy)], fill=(120, 6, 24), width=1)    # taco
@@ -1898,8 +1911,9 @@ def woman_in_red(h, frame, phase=None, amp=.4):
     # escote y hombros descubiertos
     d.polygon([(cx - 1.4 * u, 4.2 * u), (cx + 1.1 * u, 4.2 * u), (cx + .6 * u, 4.9 * u), (cx - 1.2 * u, 5.0 * u)], fill=skin)
     # brazo con balanceo y cartera chica
-    sw = 1.1 * np.sin(2 * np.pi * phase) * u              # opuesto a la pierna cercana
-    d.line([(cx + .1 * u, 4.8 * u), (cx + sw * .5, 7.6 * u), (cx + sw, 10.2 * u)], fill=skin, width=max(1, int(.75 * u)))
+    sw = .7 * np.sin(2 * np.pi * phase) * u               # opuesto a la pierna cercana (contenido)
+    limb(d, (cx + .1 * u, 4.8 * u), (cx + sw * .5, 7.6 * u), 1.4 * u, 1.2 * u, skin)
+    limb(d, (cx + sw * .5, 7.6 * u), (cx + sw, 10.2 * u), 1.2 * u, 1.0 * u, skin)
     d.rectangle([cx + sw - .7 * u, 10.0 * u, cx + sw + .6 * u, 10.9 * u], fill=(30, 20, 24))
     # cabeza
     d.rectangle([cx - .55 * u, 3.4 * u, cx + .25 * u, 4.4 * u], fill=skin)                         # cuello fino
