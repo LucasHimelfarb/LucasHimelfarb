@@ -86,6 +86,18 @@ def rect(x, y, w, h, fill, extra=""):
     return f'<rect x="{x}" y="{y}" width="{w}" height="{h}" fill="{fill}"{extra}/>'
 
 
+def limb(d, p0, p1, w0, w1, col):
+    """Segmento de extremidad con volumen: trapecio que se afina de w0 a w1, con extremos redondeados."""
+    (x0, y0), (x1, y1) = p0, p1
+    dx_, dy_ = x1 - x0, y1 - y0
+    L_ = max(1e-6, np.hypot(dx_, dy_))
+    nx_, ny_ = -dy_ / L_, dx_ / L_
+    d.polygon([(x0 + nx_ * w0 / 2, y0 + ny_ * w0 / 2), (x1 + nx_ * w1 / 2, y1 + ny_ * w1 / 2),
+               (x1 - nx_ * w1 / 2, y1 - ny_ * w1 / 2), (x0 - nx_ * w0 / 2, y0 - ny_ * w0 / 2)], fill=col)
+    for (x, y), w_ in ((p0, w0), (p1, w1)):
+        d.ellipse([x - w_ / 2, y - w_ / 2, x + w_ / 2, y + w_ / 2], fill=col)
+
+
 def runs(px):
     rows = {}
     for x, y in px:
@@ -986,6 +998,86 @@ for px in (372, 468, 566):                                              # postes
     near[30:32, px - 4:px + 6, :3] = (40, 48, 44); near[30:32, px - 4:px + 6, 3] = 255
 
 
+# ---------- vegetación
+def street_tree(height, seed, young=True):
+    """Árbol de vereda neoyorquino: tronco fino, ramas y copa de hojas en varios verdes (dibujado a 4x)."""
+    S4 = 4
+    Hh = height * S4
+    w_ = int(height * .62) * S4
+    im = Image.new("RGBA", (w_, int(Hh) + S4), (0, 0, 0, 0)); d = ImageDraw.Draw(im)
+    rt = random.Random(seed)
+    cx_t, base = w_ / 2, Hh
+    trunk_top = base - Hh * .45
+    limb(d, (cx_t, base), (cx_t + rt.uniform(-.02, .02) * Hh, trunk_top), .07 * Hh, .045 * Hh, (74, 62, 52))
+    d.line([(cx_t - .015 * Hh, base), (cx_t - .012 * Hh, trunk_top)], fill=(110, 96, 82), width=max(1, int(.012 * Hh)))
+    for a_ in (-.7, -.25, .2, .65):                          # ramas
+        ex, ey = cx_t + np.sin(a_) * .25 * Hh, trunk_top - np.cos(a_) * .22 * Hh
+        limb(d, (cx_t, trunk_top + .03 * Hh), (ex, ey), .03 * Hh, .014 * Hh, (70, 58, 48))
+    greens = [(54, 92, 50), (70, 112, 58), (88, 132, 66), (112, 154, 80), (44, 76, 44)]
+    for _ in range(46 if young else 70):                     # racimos de hojas
+        ang = rt.uniform(0, 2 * np.pi)
+        rr = rt.uniform(0, 1) ** .6
+        lx_ = cx_t + np.cos(ang) * rr * .3 * Hh
+        ly_ = trunk_top - .24 * Hh + np.sin(ang) * rr * .22 * Hh
+        r_ = rt.uniform(.035, .07) * Hh
+        g_ = greens[min(4, int((1 - (ly_ - (trunk_top - .46 * Hh)) / (.5 * Hh)) * 3.5 + rt.uniform(-1, 1)))] \
+            if rt.random() < .85 else greens[4]
+        d.ellipse([lx_ - r_, ly_ - r_ * .85, lx_ + r_, ly_ + r_ * .85], fill=g_)
+    for _ in range(14):                                      # luz en la parte de arriba de la copa
+        lx_ = cx_t + rt.uniform(-.22, .22) * Hh
+        ly_ = trunk_top - .36 * Hh + rt.uniform(-.08, .1) * Hh
+        r_ = rt.uniform(.02, .035) * Hh
+        d.ellipse([lx_ - r_, ly_ - r_, lx_ + r_, ly_ + r_], fill=(140, 180, 96))
+    return _finish(im, int(w_ / S4), int(im.height / S4))
+
+
+def planter(width, seed):
+    """Macetón de piedra con un arbusto (para las entradas monumentales)."""
+    S4 = 4
+    im = Image.new("RGBA", (width * S4, int(width * 1.3) * S4), (0, 0, 0, 0)); d = ImageDraw.Draw(im)
+    W4, H4 = width * S4, im.height
+    d.rectangle([W4 * .1, H4 * .55, W4 * .9, H4 - 1], fill=(196, 192, 182))
+    d.rectangle([W4 * .05, H4 * .52, W4 * .95, H4 * .6], fill=(214, 210, 200))
+    rp = random.Random(seed)
+    for _ in range(18):
+        x_, y_ = rp.uniform(.15, .85) * W4, rp.uniform(.12, .5) * H4
+        r_ = rp.uniform(.12, .2) * W4
+        d.ellipse([x_ - r_, y_ - r_, x_ + r_, y_ + r_], fill=rp.choice([(52, 96, 52), (70, 116, 60), (90, 136, 70)]))
+    return _finish(im, width, int(H4 / S4))
+
+
+def bake(im, x0, base_y):
+    a_ = np.asarray(im, dtype=float)
+    ys_, xs_ = np.nonzero(a_[..., 3] > 0)
+    ty, tx = ys_ + int(base_y - im.height + 1), (xs_ + int(x0)) % TW
+    ok = (ty >= 0) & (ty < H)
+    near[ty[ok], tx[ok], :3] = a_[ys_[ok], xs_[ok], :3]
+    near[ty[ok], tx[ok], 3] = 255
+
+
+FAR_TREE_H = 40                                              # ~3.5 m a la distancia de la vereda de enfrente
+for i_, tx_ in enumerate((296, 430, 560)):                # lejos de la pantalla LED y de la esquina
+    t_im = street_tree(FAR_TREE_H, 50 + i_)
+    bake(t_im, tx_ - t_im.width / 2, AVE_TOP + 2)
+for bi_ in (0, 5):                                           # macetones a los lados de las entradas monumentales
+    bx_, bw_ = blds[bi_][0], blds[bi_][1]
+    for side_ in (-1, 1):
+        pl = planter(7, 70 + bi_ * 2 + side_)
+        bake(pl, bx_ + bw_ / 2 + side_ * 23 - pl.width / 2, AVE_TOP + 1)
+# canteros de tierra con rejita para los árboles de nuestra vereda (en el piso: toman la perspectiva)
+OUR_TREES = (24, 458, 612)
+for tx_ in OUR_TREES:
+    for x_ in range(tx_ - 7, tx_ + 8):
+        xx_ = x_ % TW
+        near[GROUND + 3:GROUND + 7, xx_, :3] = (66, 54, 44)
+        if (x_ - tx_) % 3 == 0:
+            near[GROUND + 3:GROUND + 7, xx_, :3] = (82, 68, 56)
+    for x_ in range(tx_ - 8, tx_ + 9):                       # rejita de hierro alrededor
+        near[GROUND + 2, x_ % TW, :3] = (30, 30, 32)
+        near[GROUND + 7, x_ % TW, :3] = (30, 30, 32)
+    for y_ in range(GROUND + 2, GROUND + 8):
+        near[y_, (tx_ - 8) % TW, :3] = (30, 30, 32); near[y_, (tx_ + 8) % TW, :3] = (30, 30, 32)
+
 # latas de gaseosa tiradas en la vereda de la cuadra larga (en el piso, toman la perspectiva)
 CANS = [(20, 101, (200, 30, 40)), (62, 104, (40, 90, 190)), (118, 99, (200, 30, 40)), (330, 103, (210, 210, 214)),
         (402, 100, (40, 140, 70)), (455, 105, (200, 30, 40)), (512, 101, (210, 210, 214)), (602, 99, (40, 90, 190))]
@@ -1132,18 +1224,6 @@ SUIT = [(58, 64, 62), (44, 50, 60), (84, 80, 72), (70, 76, 70), (36, 40, 40), (9
 
 GAIT_N = 8                                               # cuadros por ciclo de marcha
 GAIT_K = .5                                              # flexión máxima de rodilla en el balanceo (rad)
-
-
-def limb(d, p0, p1, w0, w1, col):
-    """Segmento de extremidad con volumen: trapecio que se afina de w0 a w1, con extremos redondeados."""
-    (x0, y0), (x1, y1) = p0, p1
-    dx_, dy_ = x1 - x0, y1 - y0
-    L_ = max(1e-6, np.hypot(dx_, dy_))
-    nx_, ny_ = -dy_ / L_, dx_ / L_
-    d.polygon([(x0 + nx_ * w0 / 2, y0 + ny_ * w0 / 2), (x1 + nx_ * w1 / 2, y1 + ny_ * w1 / 2),
-               (x1 - nx_ * w1 / 2, y1 - ny_ * w1 / 2), (x0 - nx_ * w0 / 2, y0 - ny_ * w0 / 2)], fill=col)
-    for (x, y), w_ in ((p0, w0), (p1, w1)):
-        d.ellipse([x - w_ / 2, y - w_ / 2, x + w_ / 2, y + w_ / 2], fill=col)
 
 
 def gait_legs(phase, legL, A):
@@ -1864,12 +1944,79 @@ dump_svg = (f'<g style="{WALK_VIS}">{image(dump, DX, DY, up=1)}</g>'
 dump_svg = "".join(f'<g transform="translate({off} 0)">{dump_svg}</g>' for off in (0, -TW))
 body.append(f'<g style="{track(TILE0, NEAR_SPEED, TW, 0, 0)}">{dump_svg}</g>')
 
+# ============================================================ árboles de nuestra vereda (capa propia)
+OUR_TREE_H = 66                                              # ~3.5 m junto al cordón
+trees_svg = ""
+for i_, tx_ in enumerate(OUR_TREES):
+    t_im = street_tree(OUR_TREE_H, 90 + i_)
+    trees_svg += image(t_im, tx_ - t_im.width / 2, GROUND + 5 - t_im.height, up=1)
+trees_svg = "".join(f'<g transform="translate({off} 0)">{trees_svg}</g>' for off in (0, -TW, TW))
+body.append(f'<g style="{track(TILE0, NEAR_SPEED, TW, 0, 0)}">{trees_svg}</g>')
+
 # ============================================================ hidrante (capa propia)
 # Por delante de los autos y sus sombras, por detrás de la gente de la vereda (pies más abajo).
 hyd_svg = (f'<g style="{WALK_VIS}">{image(hyd, HX, HB - 14, up=1)}</g>'
            f'<g opacity="0" style="{FRZ_VIS}">{image(frozen(hyd), HX, HB - 14, up=1)}</g>')
 hyd_svg = "".join(f'<g transform="translate({off} 0)">{hyd_svg}</g>' for off in (0, -TW))
 body.append(f'<g style="{track(TILE0, NEAR_SPEED, TW, 0, 0)}">{hyd_svg}</g>')
+
+# ============================================================ alguien paseando un perro (una sola vez)
+def dog(h, phase):
+    """Perro tipo beagle de perfil, mirando a la izquierda, trotando (patas en diagonal)."""
+    S4 = 4
+    L_ = int(h * 1.5) * S4
+    im = Image.new("RGBA", (L_, int(h * 1.25) * S4), (0, 0, 0, 0)); d = ImageDraw.Draw(im)
+    Hs_ = h * S4
+    tan, white, black = (184, 128, 70), (232, 226, 212), (40, 32, 28)
+    by_ = im.height - .55 * Hs_                              # línea del lomo
+    bx0, bx1 = .3 * Hs_, 1.2 * Hs_
+    for i_, (lx, sh) in enumerate(((.42, 1.0), (1.05, 1.0), (.5, .75), (1.12, .75))):   # patas: diagonal
+        ph_ = phase + (0 if i_ in (0, 3) else .5)
+        sw = np.sin(2 * np.pi * ph_) * .16 * Hs_
+        lift = max(0.0, np.cos(2 * np.pi * ph_)) * .08 * Hs_
+        col = white if sh == 1.0 else (196, 190, 178)
+        limb(d, (lx * Hs_, by_ + .1 * Hs_), (lx * Hs_ - sw, im.height - 1 - lift), .1 * Hs_, .08 * Hs_, col)
+    d.ellipse([bx0, by_ - .2 * Hs_, bx1, by_ + .25 * Hs_], fill=tan)                 # cuerpo
+    d.ellipse([.55 * Hs_, by_ - .2 * Hs_, 1.0 * Hs_, by_ + .02 * Hs_], fill=black)    # montura negra
+    d.ellipse([bx0 + .05 * Hs_, by_ + .02 * Hs_, .75 * Hs_, by_ + .25 * Hs_], fill=white)   # pecho y panza
+    wag = np.sin(4 * np.pi * phase) * .08 * Hs_
+    limb(d, (1.15 * Hs_, by_ - .1 * Hs_), (1.35 * Hs_ + wag * .3, by_ - .45 * Hs_ + wag), .07 * Hs_, .04 * Hs_, tan)  # cola
+    d.ellipse([1.3 * Hs_ + wag * .3, by_ - .5 * Hs_ + wag, 1.38 * Hs_ + wag * .3, by_ - .42 * Hs_ + wag], fill=white)
+    hx_, hy_ = .22 * Hs_, by_ - .32 * Hs_                    # cabeza y hocico
+    d.ellipse([hx_ - .16 * Hs_, hy_ - .16 * Hs_, hx_ + .16 * Hs_, hy_ + .15 * Hs_], fill=tan)
+    d.polygon([(hx_ - .1 * Hs_, hy_ - .02 * Hs_), (hx_ - .3 * Hs_, hy_ + .04 * Hs_), (hx_ - .3 * Hs_, hy_ + .14 * Hs_),
+               (hx_ - .06 * Hs_, hy_ + .15 * Hs_)], fill=white)
+    d.ellipse([hx_ - .33 * Hs_, hy_ + .02 * Hs_, hx_ - .26 * Hs_, hy_ + .08 * Hs_], fill=black)   # nariz
+    d.ellipse([hx_ - .02 * Hs_, hy_ - .12 * Hs_, hx_ + .12 * Hs_, hy_ + .14 * Hs_], fill=(120, 76, 40))   # oreja caída
+    d.ellipse([hx_ - .12 * Hs_, hy_ - .07 * Hs_, hx_ - .07 * Hs_, hy_ - .02 * Hs_], fill=black)   # ojo
+    d.rectangle([hx_ + .06 * Hs_, hy_ + .1 * Hs_, hx_ + .14 * Hs_, hy_ + .18 * Hs_], fill=(200, 40, 40))  # collar
+    return _finish(im, int(L_ / S4), int(im.height / S4))
+
+
+DW_Y = LANE_FAR                                              # carril de enfrente: va hacia la derecha
+DW_H = round(PERSP_K * (DW_Y - HORIZON))
+DOG_H = max(6, round(DW_H * .26))                            # ~45 cm a la cruz
+DW_WORLD = 18.0                                              # paseo tranquilo (~0.9 m/s)
+DW_REL = DW_WORLD + NEAR_SPEED
+DW_T0 = 2.5                                                  # entra por la izquierda
+DW_T1 = DW_T0 + (W + 120) / DW_REL                           # sale por la derecha
+dw_look = dict(crowd_look("f_coat", random.Random(77)), coat=(96, 70, 58), long_hair=True, hair=(150, 96, 56))
+A_dw, cyc_dw = gait_params(DW_H, DW_WORLD)
+dw_frames = walk_frames(lambda ph, a: figure(DW_H, 0, dw_look, phase=ph, amp=a), A_dw)
+dog_frames = [dog(DOG_H, i / GAIT_N) for i in range(GAIT_N)]
+cyc_dog = .42                                                # trote corto y rápido
+walker = sprite_group(dw_frames, 0, -DW_H, step=cyc_dw, flip=True)
+pup = sprite_group(dog_frames, 0, 0, step=cyc_dog, flip=True)
+hand_x, hand_y = dw_frames[0].width * .7, -DW_H * .52        # mano que lleva la correa (mirando a la derecha)
+dog_x = dw_frames[0].width + 10
+leash = (f'<path d="M{hand_x:.1f} {hand_y:.1f} Q{(hand_x + dog_x) / 2:.1f} {-DOG_H * .4:.1f} '
+         f'{dog_x + 2:.1f} {-DOG_H * .75:.1f}" stroke="#2a2420" stroke-width=".7" fill="none"/>')
+kdw = nid("dw")
+css.append(f"@keyframes {kdw}{{0%,{pct(DW_T0):.3f}%{{transform:translate(-60px,{DW_Y}px)}}"
+           f"{pct(DW_T1):.3f}%,100%{{transform:translate({W + 60:.0f}px,{DW_Y}px)}}}}")
+dog_walker = (f'<g style="transform:translate(-60px,{DW_Y}px);animation:{kdw} {T}s infinite linear">'
+              f'<g style="{WALK_VIS}">{leash}</g>{walker}'
+              f'<g transform="translate({dog_x} {-dog_frames[0].height + 1})">{pup}</g></g>')
 
 # ============================================================ multitud: dos carriles de vereda
 # Carril de enfrente: gente que va hacia la derecha (~1 m/s). Carril cercano (el nuestro): gente que va
@@ -1899,6 +2046,7 @@ for i in range(11):
     if i not in KEEP_OUR_SIDE:                         # (se generan igual para no alterar la secuencia aleatoria)
         continue
     crowd_back.append((ly, f'<g style="{track(x0_c, v, span_i, MARGIN, ly)}">{s}</g>'))
+crowd_back.append((LANE_FAR, dog_walker))                    # paseador de perro (una sola vez por vuelta)
 crowd_back = [g_ for _, g_ in sorted(crowd_back, key=lambda c: c[0])]   # el carril de enfrente se dibuja primero
 body.extend(crowd_back)
 
