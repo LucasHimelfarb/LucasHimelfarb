@@ -273,17 +273,19 @@ m = cva[..., 3] > 0
 near[m, :3] = cva[m, :3]; near[m, 3] = 255
 
 
+F, Z0 = 100.0, 100.0                                  # perspectiva de la calle transversal
+VPX, VPY = GC, 46.0                                   # punto de fuga
+WC = (GW / 2) * Z0 / F                                # semiancho hasta las fachadas
+HC = (AVE_TOP + 4 - VPY) * Z0 / F                     # altura de la cámara
+WR = WC * .72                                         # semiancho de la calzada
+
+
 def street_corridor():
     """Calle transversal en perspectiva de un punto: edificios a ambos lados hasta el horizonte.
 
     Raycast por píxel: cada píxel del hueco choca con el piso (calzada / vereda), con la
     pared de una de las dos hileras de edificios, o con nada (ahí se ve el skyline del fondo).
     """
-    F, Z0 = 100.0, 100.0
-    VPX, VPY = GC, 46.0                                   # punto de fuga
-    WC = (GW / 2) * Z0 / F                                # semiancho hasta las fachadas
-    HC = (AVE_TOP + 4 - VPY) * Z0 / F                     # altura de la cámara
-    WR = WC * .72                                         # semiancho de la calzada
     segs = {}
     for side in (-1, 1):
         z, lst = Z0, []
@@ -573,6 +575,61 @@ def car_side(w, body, bus=False):
         d.point((wx, h - r), fill=(120, 124, 120))
     return im
 
+
+def car_rear(w, body):
+    h = int(w * .55)
+    im = Image.new("RGBA", (w, h), (0, 0, 0, 0)); d = ImageDraw.Draw(im)
+    d.rectangle([w * .18, 0, w * .82, h * .42], fill=tuple(int(c * .8) for c in body))
+    d.rectangle([w * .24, h * .08, w * .76, h * .38], fill=(40, 52, 54))                           # luneta
+    d.rectangle([0, h * .42, w - 1, h * .86], fill=body)
+    d.rectangle([w * .04, h * .5, w * .22, h * .64], fill=(240, 40, 40))                           # luces traseras
+    d.rectangle([w * .78, h * .5, w * .96, h * .64], fill=(240, 40, 40))
+    d.rectangle([w * .4, h * .6, w * .6, h * .72], fill=(220, 220, 200))                           # patente
+    d.rectangle([w * .04, h * .86, w * .2, h - 1], fill=(14, 14, 14))
+    d.rectangle([w * .8, h * .86, w * .96, h - 1], fill=(14, 14, 14))
+    return im
+
+
+# ------------------------------------------------ un auto dobla en la esquina y se pierde por la calle
+def eff(t):
+    return t if t < F0 else (F0 if t < F1 else t - (F1 - F0))
+
+
+def tile_g(t):                                         # desplazamiento (sin módulo) del tile en el tiempo t
+    return TILE0 + NEAR_SPEED * eff(t)
+
+
+TURN_COL = (196, 150, 40)                              # un taxi amarillo, para que se distinga
+T_IN, T_TURN, T_GONE = 11.6, 14.6, 19.6
+LANE_Y = GROUND - 1                                    # carril cercano (va hacia la derecha)
+X_LANE = WR * .5                                       # carril de ida de la calle transversal
+z_a = F * HC / (LANE_Y - VPY)
+x_turn = VPX + F * X_LANE / z_a                        # en coordenadas del tile
+scr_turn = (tile_g(T_TURN) + x_turn) % W
+x_start = -40 + x_turn - scr_turn + NEAR_SPEED * (T_TURN - T_IN)
+side = car_side(26, TURN_COL).transpose(Image.FLIP_LEFT_RIGHT)
+rear = car_rear(24, TURN_COL)
+ka, kb = nid("turnA"), nid("turnB")
+css.append(f"@keyframes {ka}{{0%,{pct(T_IN):.3f}%{{transform:translate({x_start:.1f}px,{LANE_Y}px);opacity:0}}"
+           f"{pct(T_IN) + .001:.3f}%{{opacity:1;transform:translate({x_start:.1f}px,{LANE_Y}px)}}"
+           f"{pct(T_TURN - .5):.3f}%{{opacity:1;transform:translate({x_turn - 3:.1f}px,{LANE_Y}px)}}"
+           f"{pct(T_TURN):.3f}%{{opacity:1;transform:translate({x_turn:.1f}px,{LANE_Y}px)}}"
+           f"{pct(T_TURN) + .001:.3f}%,100%{{opacity:0;transform:translate({x_turn:.1f}px,{LANE_Y}px)}}}}")
+frames = [f"0%,{pct(T_TURN) - .001:.3f}%{{opacity:0;transform:translate({x_turn:.1f}px,{LANE_Y}px) scale(1)}}"]
+kz = np.log(3200 / z_a) / (T_GONE - T_TURN)
+for i in range(17):
+    t = T_TURN + (T_GONE - T_TURN) * i / 16
+    z = z_a * np.exp(kz * (t - T_TURN))
+    haze_t = 1 - np.exp(-max(z - Z0, 0) / 1100)
+    op = max(0.0, 1 - haze_t * 1.05) if i < 16 else 0
+    frames.append(f"{pct(t):.3f}%{{opacity:{op:.2f};transform:translate({VPX + F * X_LANE / z:.2f}px,"
+                  f"{VPY + F * HC / z:.2f}px) scale({z_a / z:.4f})}}")
+frames.append(f"100%{{opacity:0;transform:translate({VPX:.1f}px,{VPY}px) scale(.02)}}")
+css.append(f"@keyframes {kb}{{{''.join(frames)}}}")
+turn_svg = (f'<g style="animation:{ka} {T}s infinite linear">{image(side, -side.width // 2, -side.height, up=1)}</g>'
+            f'<g style="animation:{kb} {T}s infinite linear">{image(rear, -rear.width // 2, -rear.height, up=1)}</g>')
+turn_svg = turn_svg + f'<g transform="translate({-W} 0)">{turn_svg}</g>'
+body.append(f'<g style="{track(TILE0, NEAR_SPEED, W, 0, 0)}"><g style="{WALK_VIS}">{turn_svg}</g></g>')
 
 CAR_COLS = [(150, 40, 40), (60, 80, 120), (190, 186, 170), (40, 44, 48), (90, 110, 70), (170, 150, 60)]
 CSPAN, CMARG = W + 120, 60
