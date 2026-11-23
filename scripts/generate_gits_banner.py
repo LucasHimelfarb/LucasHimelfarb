@@ -656,7 +656,7 @@ FONT = {
  " ": ["00000"] * 7,
 }
 TEXT, TX, TY, TC = "LUCAS HIMELFARB", 12, 14, "#d8f6f0"
-TCYC = 30  # ciclo maestro: nombre + dossier HUD
+TCYC = 30  # ciclo del nombre
 css.append(f"@keyframes bl{{0%,49%{{opacity:1}}50%,100%{{opacity:0}}}}"
            f"@keyframes tglitch{{0%,62%,64%,100%{{transform:translateX(0)}}62.5%{{transform:translateX(2px)}}63.2%{{transform:translateX(-1px)}}}}")
 chars = []
@@ -676,77 +676,6 @@ body.append(rect(TX - 6, TY + 2, 3, 3, "#ff3048", ' style="animation:bl 1.2s inf
 css.append(f"@keyframes uline{{0%,9%{{transform:scaleX(0)}}12%,98.5%{{transform:scaleX(1)}}98.6%,100%{{transform:scaleX(0)}}}}")
 body.append(f'<rect x="{TX}" y="{TY + 10}" width="{len(TEXT) * 6 - 1}" height="1" fill="{TC}" opacity=".45" '
             f'style="transform-origin:{TX}px 0;animation:uline {TCYC}s infinite"/>')
-
-# ============================================================ 13. dossier HUD: perfil como persona y profesional
-# Cada tarjeta: (encabezado, [(etiqueta, valor), ...]). Editá acá para cambiar el contenido.
-CARDS = [
-    ("PERFIL 01/04", [("CLASE", "SOFTWARE ENGINEER"), ("GREMIO", "HUMAND"), ("BASE", "CORDOBA, ARGENTINA")]),
-    ("SIDE QUEST 02/04", [("NOMBRE", "LIMAO"), ("MISION", "IA PARA PYMES"), ("ESTADO", "EN CONSTRUCCION")]),
-    ("INVENTARIO 03/04", [("X1", "MATE CEBADO"), ("X1", "TECLADO MECANICO"), ("X99", "CURIOSIDAD")]),
-    ("LOG 04/04", [("DESDE", "2019 EN GITHUB"), ("COPILOT", "CLAUDE"), ("STATUS", "ONLINE")]),
-]
-PX, PY, PW, PH = 8, 27, 116, 34
-OPEN, CARD = 3.2, 6.6                     # s: apertura del panel y duración de cada tarjeta
-CLOSE = OPEN + CARD * len(CARDS)          # 29.6 s
-HC_HEAD, HC_LBL, HC_VAL, HC_ACC = "#ffb050", "#6f98a4", "#d8f6f0", "#ff3048"
-pct = lambda t: t / TCYC * 100
-
-css.append(f"@keyframes hudp{{0%,{pct(OPEN - .25):.2f}%{{transform:scaleY(0)}}{pct(OPEN):.2f}%,{pct(CLOSE - .25):.2f}%"
-           f"{{transform:scaleY(1)}}{pct(CLOSE):.2f}%,100%{{transform:scaleY(0)}}}}"
-           "@keyframes scan{from{transform:translateY(0)}to{transform:translateY(32px)}}")
-panel = (rect(PX, PY, PW, PH, "#05060c", ' opacity=".62"')
-         + rect(PX, PY, PW, 7, HC_HEAD, ' opacity=".14"')
-         + f'<rect x="{PX + .5}" y="{PY + .5}" width="{PW - 1}" height="{PH - 1}" fill="none" stroke="{HC_VAL}" '
-           f'stroke-width="1" opacity=".22" shape-rendering="crispEdges"/>')
-for cx_, cy_, dx_, dy_ in [(PX, PY, 1, 1), (PX + PW - 1, PY, -1, 1), (PX, PY + PH - 1, 1, -1), (PX + PW - 1, PY + PH - 1, -1, -1)]:
-    panel += f'<g fill="{HC_VAL}" opacity=".8">{runs({(cx_ + dx_ * i, cy_) for i in range(4)} | {(cx_, cy_ + dy_ * i) for i in range(4)})}</g>'
-panel += (f'<g opacity=".07" style="animation:scan 2.4s infinite linear">{rect(PX + 1, PY + 1, PW - 2, 1, HC_VAL)}</g>')
-cards_svg = []
-for ci, (head, rows) in enumerate(CARDS):
-    t0, t1 = OPEN + ci * CARD, OPEN + (ci + 1) * CARD
-    kv = nid("card")
-    css.append(f"@keyframes {kv}{{0%,{pct(t0):.2f}%{{opacity:0}}{pct(t0) + .01:.2f}%,{pct(t1) - .2:.2f}%{{opacity:1}}"
-               f"{pct(t1) - .19:.2f}%,100%{{opacity:0}}}}")
-    lines = [(f"> {head}", HC_HEAD, None)] + [(f"{lbl}", HC_LBL, val) for lbl, val in rows]
-    out, t = [], t0 + .15
-    for li, (txt, col, val) in enumerate(lines):
-        ly_ = PY + 2 + li * 8 if li else PY + 1
-        full = txt if val is None else f"{txt:<8}{val}"
-        n = len(full)
-        px_lbl = mini_px(txt, PX + 3, ly_)
-        px_val = mini_px(val, PX + 3 + 8 * 4, ly_) if val else set()
-        if ci == 3 and val == "ONLINE":
-            out_dot = rect(PX + 3 + (8 + len(val)) * 4 + 1, ly_ + 1, 3, 3, "#58e07a",
-                           ' style="animation:bl 1.2s infinite steps(1)"')
-        else:
-            out_dot = ""
-        cid, ka = nid("tw"), nid("ty")
-        dur = n * .035
-        n += 2 if out_dot else 0
-        css.append(f"@keyframes {ka}{{0%,{pct(t):.2f}%{{transform:scaleX(0)}}{pct(t + dur):.2f}%,100%{{transform:scaleX(1)}}}}")
-        defs.append(f'<clipPath id="{cid}"><rect x="{PX + 3}" y="{ly_ - 1}" width="{n * 4 + 6}" height="7" '
-                    f'style="transform-origin:{PX + 3}px 0;animation:{ka} {TCYC}s infinite steps({n})"/></clipPath>')
-        g = f'<g fill="{col}">{runs(px_lbl)}</g>' + (f'<g fill="{HC_VAL}">{runs(px_val)}</g>' if val else "")
-        out.append(f'<g clip-path="url(#{cid})"><g fill="#000" opacity=".5" transform="translate(1 1)">'
-                   f'{runs(px_lbl | px_val)}</g>{g}{out_dot}</g>')
-        t += dur + .12
-    if ci == 1:   # barra de progreso del side quest
-        kb = nid("bar")
-        css.append(f"@keyframes {kb}{{0%,{pct(t):.2f}%{{transform:scaleX(0)}}{pct(t + 1.2):.2f}%,100%{{transform:scaleX(.42)}}}}")
-        out.append(rect(PX + 3 + 8 * 4 + 64, PY + 2 + 3 * 8 + 1, 12, 3, HC_VAL, ' opacity=".2"')
-                   + f'<rect x="{PX + 3 + 8 * 4 + 64}" y="{PY + 2 + 3 * 8 + 1}" width="12" height="3" fill="#aaf03c" '
-                     f'style="transform-origin:{PX + 99}px 0;animation:{kb} {TCYC}s infinite"/>')
-    cards_svg.append(f'<g opacity="0" style="animation:{kv} {TCYC}s infinite steps(1)">{"".join(out)}</g>')
-# indicador de páginas
-dots = "".join(rect(PX + PW - 4 - (len(CARDS) - 1 - i) * 3, PY + 2, 2, 2, HC_HEAD, ' opacity=".25"') for i in range(len(CARDS)))
-for ci in range(len(CARDS)):
-    t0, t1 = OPEN + ci * CARD, OPEN + (ci + 1) * CARD
-    kd = nid("dot")
-    css.append(f"@keyframes {kd}{{0%,{pct(t0):.2f}%{{opacity:0}}{pct(t0) + .01:.2f}%,{pct(t1) - .2:.2f}%{{opacity:1}}"
-               f"{pct(t1) - .19:.2f}%,100%{{opacity:0}}}}")
-    dots += rect(PX + PW - 4 - (len(CARDS) - 1 - ci) * 3, PY + 2, 2, 2, HC_HEAD, f' opacity="0" style="animation:{kd} {TCYC}s infinite steps(1)"')
-body.append(f'<g style="transform-origin:0 {PY}px;transform:scaleY(0);animation:hudp {TCYC}s infinite">'
-            f'{panel}{"".join(cards_svg)}{dots}</g>')
 
 # ============================================================ salida
 svg = (f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {W} {H}" width="{OUT_W}" height="{OUT_H}" '
