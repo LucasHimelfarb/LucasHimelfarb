@@ -526,7 +526,7 @@ def street_corridor():
         g[dash] = (210, 204, 150)
         far_xw = (zg >= 86) & (zg < Z0 - .5) & (X < WR - 1.5) & (((X + WR) % 7) < 3.6)   # senda de enfrente
         g[far_xw] = (226, 228, 214)
-        stop_far = (zg >= 101) & (zg < 104.5) & (sgn < 0) & (X < WR - .3)                    # línea de detención
+        stop_far = (zg >= 105.5) & (zg < 108.5) & (X < WR - .3)                              # línea de detención (ambos carriles)
         g[stop_far] = (236, 238, 228)
         g[(X <= WR) & (X > WR - 1.5)] -= 10                   # sombra del cordón
         put(np.isfinite(zg), zg, g)
@@ -712,7 +712,7 @@ near[HB - 14 + ys_h, HX + xs_h, :3] = ha[ys_h, xs_h, :3]
 #  - sendas para cruzar la avenida a cada lado de la bocacalle (WR < |X| < WC): rayas a lo largo
 #    de la avenida, apiladas en profundidad; la línea divisoria se corta en el cruce.
 xs_all = np.arange(W) + .5
-XW_END = H - 12                                          # fin de las rayas de nuestra senda (antes de la franja negra)
+XW_END = H - 15                                          # fin de las rayas de nuestra senda (antes de la franja negra)
 for y_ in range(AVE_TOP + 4, H):
     f_ = (y_ + .5 - VPY) / HC
     Xr = (xs_all - GC) / f_                              # posición real a lo ancho de la calle del fondo
@@ -724,20 +724,18 @@ for y_ in range(AVE_TOP + 4, H):
             near[y_, aX < WC + 2, :3] = (64, 70, 68)     # la línea divisoria se corta en el cruce
         cross = (aX > WR + 1) & (aX < WC - 1) & ((z_ % 6) < 2.6) & (y_ > AVE_TOP + 5) & (y_ < GROUND - 1)
         near[y_, cross, :3] = (220, 222, 210)
-        # líneas de detención antes de cada senda de la avenida, según el sentido del carril:
-        # carril de enfrente (va a la izquierda) llega por la derecha; el cercano (va a la derecha) por la izquierda
-        sw_ = max(1.0, 1.6 / f_)
-        if AVE_TOP + 5 <= y_ < AVE_TOP + 11:
-            near[y_, (Xr > WC + 1) & (Xr <= WC + 1 + sw_), :3] = (236, 238, 228)
-        elif AVE_TOP + 11 < y_ < GROUND - 1:
-            near[y_, (Xr < -WC - 1) & (Xr >= -WC - 1 - sw_), :3] = (236, 238, 228)
+        # líneas de detención a ambos lados del cruce, separadas de la senda y a lo ancho de toda la avenida
+        sw_ = max(2.2, 2.6 / f_)                          # ancho suficiente para que la diagonal no se corte
+        if AVE_TOP + 5 <= y_ < GROUND - 1:
+            stop_av = (aX > WC + 5) & (aX <= WC + 5 + sw_)
+            near[y_, stop_av, :3] = (236, 238, 228)
     else:                                                # nuestra vereda
         near[y_, road, :3] = (70, 76, 74)
         if GROUND + 2 <= y_ < XW_END:
             stripe = (aX < WR - 1.5) & (((Xr + WR) % 7) < 3.6)
             near[y_, stripe, :3] = (226, 228, 214)
-        elif XW_END + 1 <= y_ < XW_END + 3:                # línea de detención del carril que viene de la cámara
-            near[y_, (Xr > 0) & (Xr < WR - .5), :3] = (236, 238, 228)
+        elif XW_END + 4 <= y_ < XW_END + 6:                # línea de detención, separada y a lo ancho de la calle
+            near[y_, aX < WR - .5, :3] = (236, 238, 228)
         curb = (aX > WR) & (aX <= WR + max(.8, 1.2 / f_))
         near[y_, curb, :3] = (200, 202, 196)
 for _ in range(3):                                                      # postes / farolas
