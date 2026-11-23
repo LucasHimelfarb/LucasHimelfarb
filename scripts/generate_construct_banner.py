@@ -12,6 +12,12 @@ Uso:
 
 Mismo formato que el banner principal (320x128 escalado a 800x320, franjas
 cinemascope, viñeta).
+
+Resolución: la escena se piensa en un espacio lógico de 320x128 (viewBox), pero
+todo lo rasterizado (fondo, vereda, autos, árboles, gente) se dibuja a S veces esa
+resolución y se coloca con el mismo tamaño lógico. Con el zoom de cámara el banner
+se ve a ~3.1 px de pantalla por píxel lógico: con S = 3 cada píxel dibujado cae
+casi 1:1 en la pantalla y los detalles (caras, ruedas, ventanas) salen nítidos.
 """
 import base64
 import io
@@ -20,11 +26,12 @@ import zlib
 from pathlib import Path
 
 import numpy as np
-from PIL import Image, ImageDraw
+from PIL import Image, ImageDraw, ImageFilter
 
 ROOT = Path(__file__).resolve().parent.parent
 W, H = 320, 128
 OUT_W, OUT_H = 800, 320
+S = 3                    # píxeles dibujados por píxel lógico (ver docstring)
 SEED = 1999
 random.seed(SEED)
 rng = np.random.default_rng(SEED)
@@ -65,22 +72,83 @@ def posterize(rgb, colors=40, strength=10):
     return np.asarray(q.convert("RGB"), dtype=float)
 
 
-def png_uri(im):
+def to_palette(im, max_colors=255):
+    """PNG indexado (mucho más liviano que RGBA). Alfa binario: índice 0 transparente.
+    Si la imagen ya tiene pocos colores la conversión es exacta; si no, se cuantiza (median cut)."""
+    if im.mode not in ("RGB", "RGBA"):
+        return im
+    a = np.asarray(im.convert("RGBA"))
+    alpha = a[..., 3]
+    if not np.isin(alpha, (0, 255)).all():
+        return im                                            # alfa parcial: queda en RGBA
+    op = alpha > 0
+    cols = a[..., :3][op]
+    if not len(cols):
+        return im
+    uniq, inv = np.unique(cols, axis=0, return_inverse=True)
+    inv = inv.reshape(-1)
+    if len(uniq) > max_colors:
+        strip = Image.fromarray(cols[None].astype(np.uint8), "RGB")
+        q = strip.quantize(max_colors, method=Image.Quantize.MEDIANCUT, dither=Image.Dither.NONE)
+        inv = np.asarray(q).reshape(-1).astype(np.int64)
+        uniq = np.asarray(q.getpalette()[:3 * max_colors], dtype=np.uint8).reshape(-1, 3)
+    idx = np.zeros(alpha.shape, np.uint8)
+    idx[op] = inv + 1
+    p = Image.fromarray(idx, "P")
+    pal = np.zeros((len(uniq) + 1, 3), np.uint8)
+    pal[1:] = uniq
+    p.putpalette(pal.reshape(-1).tolist())
+    if not op.all():
+        p.info["transparency"] = 0
+    return p
+
+
+def _png_bytes(im, **kw):
     buf = io.BytesIO()
-    im.save(buf, "PNG", optimize=True)
-    return "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode()
+    im.save(buf, "PNG", optimize=True, **kw)
+    return buf.getvalue()
 
 
-def image(arr_or_im, x=0, y=0, attrs="", up=2):
+def png_uri(im):
+    """PNG embebido: prueba indexado (exacto si entra en 255 colores) y RGBA, y se queda con el más liviano.
+    Con alfa parcial (brillos de la lluvia de código) el indexado lleva alfa por color."""
+    cands = [_png_bytes(im)]
+    p = to_palette(im)
+    if p.mode == "P":
+        cands.append(_png_bytes(p, transparency=0) if "transparency" in p.info else _png_bytes(p))
+    elif im.mode == "RGBA":
+        cands.append(_png_bytes(im.quantize(128, method=Image.Quantize.FASTOCTREE)))
+    return "data:image/png;base64," + base64.b64encode(min(cands, key=len)).decode()
+
+
+def fnum(v):
+    """Número corto para el SVG (los rasters a S x caen en fracciones de píxel lógico)."""
+    s = f"{v:.3f}".rstrip("0").rstrip(".")
+    return s if s not in ("-0", "") else "0"
+
+
+def lw(im):
+    """Ancho lógico de un sprite dibujado a S x."""
+    return im.width / S
+
+
+def lh(im):
+    """Alto lógico de un sprite dibujado a S x."""
+    return im.height / S
+
+
+def image(arr_or_im, x=0, y=0, attrs="", res=S):
+    """<image> de un raster dibujado a `res` píxeles por píxel lógico, recortado a su contenido."""
     im = arr_or_im if isinstance(arr_or_im, Image.Image) else Image.fromarray(np.asarray(arr_or_im, np.uint8), "RGBA")
+    if im.mode != "RGBA":
+        im = im.convert("RGBA")
     bb = im.getchannel("A").getbbox()
     if not bb:
         return ""
     im = im.crop(bb)
     w, h = im.size
-    im = im.resize((w * up, h * up), Image.NEAREST)
-    return (f'<image x="{x + bb[0]}" y="{y + bb[1]}" width="{w}" height="{h}" preserveAspectRatio="none" '
-            f'href="{png_uri(im)}"{attrs}/>')
+    return (f'<image x="{fnum(x + bb[0] / res)}" y="{fnum(y + bb[1] / res)}" width="{fnum(w / res)}" '
+            f'height="{fnum(h / res)}" preserveAspectRatio="none" href="{png_uri(im)}"{attrs}/>')
 
 
 def rect(x, y, w, h, fill, extra=""):
@@ -210,7 +278,9 @@ def track(x0, v, span, margin, y):
 
 # ============================================================ fondo: ciudad del constructo (de día, verdosa)
 yy, xx = np.mgrid[0:H, 0:W]
-LANE_FAR, LANE_NEAR = 99, 104                             # carriles de la vereda: van (derecha) / vienen (izquierda, como nosotros)
+LANE_FAR, LANE_NEAR = 103, 107                            # carriles de la vereda: van (derecha) / vienen (izquierda, como nosotros)
+                                                         # (por delante de los canteros, que ocupan y 99..101.6 contra el cordón)
+CAM_DY = 4                                               # la cámara baja un poco la mirada: entra más vereda abajo
 ZOOM = 1.25                                              # cámara más cerca: la escena se agranda hacia el horizonte
 PERSP_K, HORIZON = .67, 46                               # alto de una persona = PERSP_K * (pies - HORIZON)
 GROUND = 96                                              # nuestra vereda (la avenida suma un carril de estacionamiento)
@@ -229,9 +299,14 @@ while x < W:
         for wx in range(x + 2, min(W, x + bw - 2), 3):
             _discard[wy:wy + 2, wx] = c - 22 if random.random() < .85 else c + 30
     x += bw + random.randint(0, 2)
-haze = np.clip((yy - 20) / 70, 0, 1)[..., None]
+# cielo con bruma, a S x (centro de cada píxel dibujado en coordenadas lógicas)
+ys_S = (np.arange(H * S) + .5) / S
+xs_S = (np.arange(W * S) + .5) / S
+yyS = np.broadcast_to(ys_S[:, None], (H * S, W * S))
+far_rgb = ramp(yyS / H, [(0, (150, 172, 150)), (.5, (196, 210, 186)), (1, (210, 218, 196))])
+haze = np.clip((yyS - 20) / 70, 0, 1)[..., None]
 far_rgb = far_rgb * (1 - haze * .35) + np.array([200, 212, 190]) * haze * .35
-body.append(image(Image.fromarray(np.dstack([posterize(far_rgb, 24, 8), np.full((H, W), 255)]).astype(np.uint8), "RGBA"), up=1))
+body.append(image(Image.fromarray(np.dstack([posterize(far_rgb, 24, 8), np.full((H * S, W * S), 255)]).astype(np.uint8), "RGBA")))
 
 def stable_hash(x):
     """Hash estable entre ejecuciones (hash() de Python cambia en cada corrida con strings)."""
@@ -364,7 +439,7 @@ def facade(u, v, hb, base, aw, det, bid, kind="shop", corner_edge=False, width=N
     return np.clip(c, 0, 255)
 
 
-LED_U0, LED_U1, LED_V0, LED_V1 = 4, 60, 36, 58       # pantalla LED (en la cara del edificio)
+LED_U0, LED_U1, LED_V0, LED_V1 = 4, 60, 33, 55       # pantalla LED (en la cara del edificio; libre de la franja de arriba)
 
 
 def led_frame(c, u, v, det):
@@ -508,12 +583,13 @@ def _finish(big, w, h):
     return Image.fromarray(np.clip(out, 0, 255).astype(np.uint8), "RGBA")
 
 
-def vehicle_side(length, body, kind="sedan"):
+def vehicle_side(length, body, kind="sedan", res=S):
     """Vehículo de perfil mirando a la izquierda. Altura con proporción real (auto ~1.45 m x 4.6 m)."""
+    VSr = VS * res                                      # supermuestreo sobre la resolución final
     ratio = {"sedan": .31, "taxi": .31, "police": .31, "van": .42, "bus": .27}[kind]
-    L, Hh = length * VS, length * ratio * VS
+    L, Hh = length * VSr, length * ratio * VSr
     top_pad = int(Hh * (.14 if kind in ("taxi", "police") else .02))
-    im = Image.new("RGBA", (int(L), int(Hh) + top_pad + VS * 2), (0, 0, 0, 0)); d = ImageDraw.Draw(im)
+    im = Image.new("RGBA", (int(L), int(Hh) + top_pad + VSr * 2), (0, 0, 0, 0)); d = ImageDraw.Draw(im)
     P = lambda pts: [(x * L, y * Hh + top_pad) for x, y in pts]
     hi, mid, lo, dark = _shade(body, 1.22), body, _shade(body, .78), _shade(body, .5)
     glass, glass_hi = (46, 58, 64), (120, 140, 140)
@@ -524,25 +600,25 @@ def vehicle_side(length, body, kind="sedan"):
         tint = (26, 30, 36)
         d.rounded_rectangle([0, top_pad, L - 1, Hh * .88 + top_pad], radius=Hh * .14, fill=white)   # techo redondeado
         d.rectangle(P([(.0, .66), (1, .88)])[0] + P([(1, .88)])[0], fill=white_sh)                    # zócalo
-        d.rounded_rectangle(P([(.66, -.02), (.9, .05)])[0] + P([(.9, .05)])[0], radius=VS, fill=(210, 214, 212))  # A/A
+        d.rounded_rectangle(P([(.66, -.02), (.9, .05)])[0] + P([(.9, .05)])[0], radius=VSr, fill=(210, 214, 212))  # A/A
         d.polygon(P([(.005, .2), (.05, .1), (.05, .56), (.005, .6)]), fill=tint)                       # parabrisas
-        d.line(P([(.012, .25), (.04, .14)]), fill=(110, 130, 134), width=VS)
+        d.line(P([(.012, .25), (.04, .14)]), fill=(110, 130, 134), width=VSr)
         d.rectangle(P([(.012, .05), (.1, .1)])[0] + P([(.1, .1)])[0], fill=(30, 24, 18))               # cartel de destino
         for lx_ in np.arange(.016, .096, .008):
             d.rectangle(P([(lx_, .062), (lx_ + .004, .088)])[0] + P([(lx_ + .004, .088)])[0], fill=(255, 150, 40))
         d.rectangle(P([(.12, .14), (.94, .5)])[0] + P([(.94, .5)])[0], fill=tint)                     # banda de ventanas
         for wx_ in np.arange(.2, .94, .085):
-            d.line(P([(wx_, .14), (wx_, .5)]), fill=(70, 76, 80), width=max(1, VS // 2))
-            d.line(P([(wx_ + .01, .17), (wx_ + .035, .17)]), fill=(90, 104, 110), width=max(1, VS // 2))
+            d.line(P([(wx_, .14), (wx_, .5)]), fill=(70, 76, 80), width=max(1, VSr // 2))
+            d.line(P([(wx_ + .01, .17), (wx_ + .035, .17)]), fill=(90, 104, 110), width=max(1, VSr // 2))
         for dx0, dx1 in ((.055, .115), (.5, .56)):                                                     # puertas
             d.rectangle(P([(dx0, .14), (dx1, .84)])[0] + P([(dx1, .84)])[0], fill=(44, 52, 58))
-            d.line(P([((dx0 + dx1) / 2, .14), ((dx0 + dx1) / 2, .84)]), fill=(180, 184, 184), width=max(1, VS // 2))
+            d.line(P([((dx0 + dx1) / 2, .14), ((dx0 + dx1) / 2, .84)]), fill=(180, 184, 184), width=max(1, VSr // 2))
             d.rectangle(P([(dx0, .5), (dx1, .54)])[0] + P([(dx1, .54)])[0], fill=(180, 184, 184))
         d.rectangle(P([(.0, .56), (1, .63)])[0] + P([(1, .63)])[0], fill=mta_blue)                    # franja azul MTA
         d.rectangle(P([(.0, .635), (1, .65)])[0] + P([(1, .65)])[0], fill=(120, 160, 220))
         for gx_ in np.arange(.9, .99, .012):                                                          # rejilla del motor
-            d.line(P([(gx_, .68), (gx_, .84)]), fill=(120, 124, 124), width=max(1, VS // 2))
-        d.line(P([(.0, .3), (-.01, .3)]), fill=(30, 30, 30), width=VS)                                 # brazo del espejo
+            d.line(P([(gx_, .68), (gx_, .84)]), fill=(120, 124, 124), width=max(1, VSr // 2))
+        d.line(P([(.0, .3), (-.01, .3)]), fill=(30, 30, 30), width=VSr)                                 # brazo del espejo
         d.rectangle(P([(.0, .7), (.03, .78)])[0] + P([(.03, .78)])[0], fill=(250, 244, 200))           # faro
         d.rectangle(P([(.975, .6), (1, .7)])[0] + P([(1, .7)])[0], fill=(220, 30, 36))                 # luz trasera
         d.rectangle(P([(.0, .82), (1, .88)])[0] + P([(1, .88)])[0], fill=(54, 56, 58))                 # paragolpes/zócalo
@@ -564,12 +640,12 @@ def vehicle_side(length, body, kind="sedan"):
         r = Hh * (.2 if kind != "van" else .18)
         d.polygon(P(shell), fill=mid)
         d.polygon(P([(x, max(y, .6)) for x, y in shell]), fill=lo)                                      # mitad baja en sombra
-        d.line(P([(.06, .45), (.97, .4)]), fill=hi, width=VS * 2)                                       # línea de hombros
+        d.line(P([(.06, .45), (.97, .4)]), fill=hi, width=VSr * 2)                                       # línea de hombros
         d.polygon(P(win), fill=glass); d.polygon(P(win2), fill=glass)
-        d.line(P([(win[0][0] + .03, win[0][1] - .05), (win[1][0] + .05, win[1][1] + .06)]), fill=glass_hi, width=VS)  # reflejo
-        d.line(P([(.03, .63), (.98, .63)]), fill=_shade(body, 1.05), width=VS)                         # moldura
+        d.line(P([(win[0][0] + .03, win[0][1] - .05), (win[1][0] + .05, win[1][1] + .06)]), fill=glass_hi, width=VSr)  # reflejo
+        d.line(P([(.03, .63), (.98, .63)]), fill=_shade(body, 1.05), width=VSr)                         # moldura
         for dx in ((.36, .56, .76) if kind != "van" else (.27, .52)):
-            d.line(P([(dx, .38), (dx, .78)]), fill=dark, width=max(1, VS // 2))                         # puertas
+            d.line(P([(dx, .38), (dx, .78)]), fill=dark, width=max(1, VSr // 2))                         # puertas
         for hx in ((.45, .65) if kind != "van" else (.36,)):
             d.rectangle(P([(hx, .47), (hx + .04, .5)])[0] + P([(hx + .04, .5)])[0], fill=hi)           # manijas
         d.rectangle(P([(0, .62), (.06, .76)])[0] + P([(.06, .76)])[0], fill=(40, 42, 44))               # paragolpes
@@ -578,15 +654,15 @@ def vehicle_side(length, body, kind="sedan"):
         d.rectangle(P([(.965, .44), (1, .54)])[0] + P([(1, .54)])[0], fill=(220, 30, 36))                # luz trasera
         if kind == "police":                                                    # puertas blancas, escudo, barral
             d.polygon(P([(.33, .4), (.78, .37), (.79, .62), (.33, .62)]), fill=(232, 232, 226))
-            d.line(P([(.36, .38), (.36, .62)]), fill=dark, width=max(1, VS // 2))
-            d.line(P([(.56, .38), (.56, .62)]), fill=(150, 150, 150), width=max(1, VS // 2))
+            d.line(P([(.36, .38), (.36, .62)]), fill=dark, width=max(1, VSr // 2))
+            d.line(P([(.56, .38), (.56, .62)]), fill=(150, 150, 150), width=max(1, VSr // 2))
             d.ellipse(P([(.43, .45), (.49, .56)])[0] + P([(.49, .56)])[0], fill=(206, 170, 60))
             d.rectangle([L * .46, top_pad - Hh * .1, L * .64, top_pad + Hh * .03], fill=(30, 30, 34))
             d.rectangle([L * .47, top_pad - Hh * .09, L * .55, top_pad + Hh * .0], fill=(220, 40, 50))
             d.rectangle([L * .55, top_pad - Hh * .09, L * .63, top_pad + Hh * .0], fill=(50, 90, 230))
         if kind == "taxi":
             d.rectangle([L * .5, top_pad - Hh * .12, L * .6, top_pad + Hh * .04], fill=(240, 236, 200))
-            d.line(P([(.08, .55), (.95, .52)]), fill=(30, 30, 30), width=VS * 2)                        # franja
+            d.line(P([(.08, .55), (.95, .52)]), fill=(30, 30, 30), width=VSr * 2)                        # franja
     for wx, wy in wheels:                                                                                 # ruedas
         cx, cy = wx * L, wy * Hh + top_pad
         d.ellipse([cx - r * 1.18, cy - r * 1.18, cx + r * 1.18, cy + r * 1.18], fill=(22, 22, 24))      # pasarrueda
@@ -594,12 +670,13 @@ def vehicle_side(length, body, kind="sedan"):
         d.ellipse([cx - r * .58, cy - r * .58, cx + r * .58, cy + r * .58], fill=(150, 154, 156))         # llanta
         d.ellipse([cx - r * .4, cy - r * .4, cx + r * .4, cy + r * .4], fill=(104, 108, 110))
         d.ellipse([cx - r * .14, cy - r * .14, cx + r * .14, cy + r * .14], fill=(40, 40, 42))
-    return _finish(im, int(length), int(im.height / VS))
+    return _finish(im, int(im.width / VS), int(im.height / VS))
 
 
-def vehicle_end(width, body, rear=False):
+def vehicle_end(width, body, rear=False, res=S):
     """Auto visto de frente (faros) o de atrás (luces rojas). Alto/ancho reales (~1.45 m / 1.8 m)."""
-    Wp, Hp = width * VS, width * .82 * VS
+    VSr = VS * res
+    Wp, Hp = width * VSr, width * .82 * VSr
     im = Image.new("RGBA", (int(Wp), int(Hp)), (0, 0, 0, 0)); d = ImageDraw.Draw(im)
     P = lambda pts: [(x * Wp, y * Hp) for x, y in pts]
     hi, mid, lo = _shade(body, 1.2), body, _shade(body, .72)
@@ -608,9 +685,9 @@ def vehicle_end(width, body, rear=False):
         d.rectangle(P([(tx, .78), (tx + .18, .99)])[0] + P([(tx + .18, .99)])[0], fill=(14, 14, 16))
     d.polygon(P([(.16, .02), (.84, .02), (.95, .44), (.05, .44)]), fill=lo)                               # cabina
     d.polygon(P([(.2, .07), (.8, .07), (.89, .41), (.11, .41)]), fill=(52, 66, 72) if not rear else (40, 50, 56))
-    d.line(P([(.3, .1), (.42, .38)]), fill=(140, 160, 160), width=VS)                                      # reflejo
-    d.rounded_rectangle(P([(.01, .42), (.99, .86)])[0] + P([(.99, .86)])[0], radius=VS * 2, fill=mid)    # carrocería
-    d.line(P([(.03, .46), (.97, .46)]), fill=hi, width=VS)
+    d.line(P([(.3, .1), (.42, .38)]), fill=(140, 160, 160), width=VSr)                                      # reflejo
+    d.rounded_rectangle(P([(.01, .42), (.99, .86)])[0] + P([(.99, .86)])[0], radius=VSr * 2, fill=mid)    # carrocería
+    d.line(P([(.03, .46), (.97, .46)]), fill=hi, width=VSr)
     d.rectangle(P([(-.03, .36), (.04, .44)])[0] + P([(.04, .44)])[0], fill=lo)                            # espejos
     d.rectangle(P([(.96, .36), (1.03, .44)])[0] + P([(1.03, .44)])[0], fill=lo)
     lamp = (220, 30, 40) if rear else (252, 246, 210)
@@ -619,20 +696,55 @@ def vehicle_end(width, body, rear=False):
     if not rear:
         d.rectangle(P([(.3, .52), (.7, .66)])[0] + P([(.7, .66)])[0], fill=(30, 34, 34))                  # parrilla
         for gx in (.36, .44, .52, .6):
-            d.line(P([(gx, .54), (gx, .64)]), fill=(70, 74, 74), width=max(1, VS // 2))
+            d.line(P([(gx, .54), (gx, .64)]), fill=(70, 74, 74), width=max(1, VSr // 2))
     else:
         d.rectangle(P([(.28, .5), (.72, .6)])[0] + P([(.72, .6)])[0], fill=lo)                            # baúl
     d.rectangle(P([(.38, .7), (.62, .78)])[0] + P([(.62, .78)])[0], fill=(226, 226, 210))                  # patente
     d.rectangle(P([(.0, .78), (1, .86)])[0] + P([(1, .86)])[0], fill=(40, 42, 44))                         # paragolpes
-    return _finish(im, int(width), int(Hp / VS))
+    return _finish(im, int(Wp / VS), int(Hp / VS))
 
 
 VEH_COLS = [(150, 36, 40), (52, 72, 110), (196, 194, 184), (36, 40, 44), (80, 98, 72), (120, 120, 124), (96, 60, 44)]
 
 
-# fachada cercana + vereda: un tile de 320 px que se repite y se desplaza
-near = np.zeros((H, TW, 4))
+# fachada cercana + vereda: un tile de 320 px que se repite y se desplaza (dibujado a S x)
+near = np.zeros((H * S, TW * S, 4))
 AVE_TOP = 74                                                          # base de los edificios (vereda de enfrente)
+
+
+def sl(a, b):
+    """Tramo lógico [a, b) como slice de píxeles dibujados."""
+    return slice(int(round(a * S)), int(round(b * S)))
+
+
+def centers(a, b):
+    """Centros (en coordenadas lógicas) de los píxeles dibujados del tramo [a, b)."""
+    return a + (np.arange(int(round((b - a) * S))) + .5) / S
+
+
+class SDraw:
+    """ImageDraw sobre un lienzo a S x con las coordenadas de píxel lógico de antes:
+    rect/ellipse con extremos inclusivos (como PIL a 1x) y líneas de un píxel lógico de grueso."""
+
+    def __init__(self, im):
+        self.d = ImageDraw.Draw(im)
+
+    def rect(self, xy, fill):
+        x0, y0, x1, y1 = xy
+        self.d.rectangle([x0 * S, y0 * S, (x1 + 1) * S - 1, (y1 + 1) * S - 1], fill=fill)
+
+    def ellipse(self, xy, fill):
+        x0, y0, x1, y1 = xy
+        self.d.ellipse([x0 * S, y0 * S, (x1 + 1) * S - 1, (y1 + 1) * S - 1], fill=fill)
+
+    def hline(self, x0, x1, y, fill):
+        self.rect([x0, y, x1, y], fill)
+
+    def point(self, xy, fill):
+        self.rect([xy[0], xy[1], xy[0], xy[1]], fill)
+
+
+JOINT = max(1, S * 2 // 3)                                            # grosor de las juntas entre edificios
 x = 0
 # piedra caliza clara, como los monumentos de Washington DC
 KIND_OVERRIDE = {0: "grand", 1: "billboard_led", 5: "grand", 7: "billboard_lime"}   # índices de edificios de frente
@@ -640,6 +752,20 @@ FRONT_PAL = [(206, 204, 196), (196, 196, 190), (216, 213, 204), (188, 190, 184),
 AWN = [(52, 104, 74), (128, 120, 92), (70, 80, 76), (120, 60, 56)]
 blds = []                                                             # (x, ancho, techo, color, toldo, tipo)
 fi = 0
+
+
+def front_building(x, bw, c, top, kind, aw, fi):
+    xe = min(TW, x + bw)
+    yy_, xx_ = np.meshgrid(centers(0, AVE_TOP), centers(x, xe), indexing="ij")
+    u_f = xx_ - x if kind == "grand" or kind.startswith("billboard") else xx_ - x - (bw % 40) / 2
+    face = facade(u_f, AVE_TOP - yy_, AVE_TOP - top, c, aw, 1.0, ("f", fi), kind, width=bw)
+    near[sl(0, AVE_TOP), sl(x, xe), :3] = face
+    near[sl(0, AVE_TOP), sl(x, xe), 3] = 255
+    x0_ = int(round(x * S)); x1_ = int(round(xe * S))
+    near[sl(0, AVE_TOP), x0_:x0_ + JOINT, :3] = np.clip(c + 14, 0, 255)            # juntas entre edificios
+    near[sl(0, AVE_TOP), x1_ - JOINT:x1_, :3] = c * .78
+
+
 while x < W:
     bw = random.randint(46, 78)
     bw = min(bw, W - x) if W - x < 40 else bw
@@ -647,14 +773,8 @@ while x < W:
     top = -random.randint(30, 110)                                    # muy altos: el techo queda fuera de cuadro
     kind = "lobby" if random.random() < .45 else "shop"
     aw = np.array(random.choice(AWN), float) if kind == "shop" and random.random() < .7 else None
-    yy_, xx_ = np.mgrid[0:AVE_TOP, x:min(TW, x + bw)].astype(float)
     kind = KIND_OVERRIDE.get(fi, kind)
-    u_f = xx_ - x + .5 if kind == "grand" or kind.startswith("billboard") else xx_ - x + .5 - (bw % 40) / 2
-    face = facade(u_f, AVE_TOP - yy_ - .5, AVE_TOP - top, c, aw, 1.0, ("f", fi), kind, width=bw)
-    near[0:AVE_TOP, x:x + bw, :3] = face
-    near[0:AVE_TOP, x:x + bw, 3] = 255
-    near[0:AVE_TOP, x:x + 1, :3] = np.clip(c + 14, 0, 255)            # juntas entre edificios
-    near[0:AVE_TOP, min(TW, x + bw) - 1, :3] = c * .78
+    front_building(x, bw, c, top, kind, aw, fi)
     blds.append((x, bw, top, c.copy(), aw, kind))
     fi += 1
     x += bw
@@ -669,14 +789,8 @@ while x < TW:
     top = -random.randint(30, 110)
     kind = "lobby" if random.random() < .45 else "shop"
     aw = np.array(random.choice(AWN), float) if kind == "shop" and random.random() < .7 else None
-    yy_, xx_ = np.mgrid[0:AVE_TOP, x:min(TW, x + bw)].astype(float)
     kind = KIND_OVERRIDE.get(fi, kind)
-    u_f = xx_ - x + .5 if kind == "grand" or kind.startswith("billboard") else xx_ - x + .5 - (bw % 40) / 2
-    face = facade(u_f, AVE_TOP - yy_ - .5, AVE_TOP - top, c, aw, 1.0, ("f", fi), kind, width=bw)
-    near[0:AVE_TOP, x:x + bw, :3] = face
-    near[0:AVE_TOP, x:x + bw, 3] = 255
-    near[0:AVE_TOP, x:x + 1, :3] = np.clip(c + 14, 0, 255)
-    near[0:AVE_TOP, min(TW, x + bw) - 1, :3] = c * .78
+    front_building(x, bw, c, top, kind, aw, fi)
     blds.append((x, bw, top, c.copy(), aw, kind))
     fi += 1
     x += bw
@@ -684,21 +798,25 @@ random = _main_random
 # avenida entre la vereda de enfrente y la nuestra, con bocacalle en la esquina
 GX, GW, VY = 168, 92, 60                                              # hueco de la bocacalle
 GC = GX + GW / 2
-near[:AVE_TOP, GX:GX + GW, 3] = 0
-cv = Image.new("RGBA", (TW, H), (0, 0, 0, 0)); cd = ImageDraw.Draw(cv)
-cd.rectangle([0, AVE_TOP, TW, AVE_TOP + 3], fill=(150, 158, 140, 255))      # vereda de enfrente
-cd.line([(0, AVE_TOP + 3), (TW, AVE_TOP + 3)], fill=(190, 196, 180, 255))  # cordón
-cd.rectangle([0, AVE_TOP + 4, TW, GROUND - 1], fill=(64, 70, 68, 255))     # calzada
-for lx in range(0, TW, 12):                                                # línea divisoria
-    cd.line([(lx, AVE_TOP + 11), (lx + 6, AVE_TOP + 11)], fill=(210, 204, 150, 255))
-cd.line([(0, GROUND - 1), (TW, GROUND - 1)], fill=(44, 50, 48, 255))
+near[sl(0, AVE_TOP), sl(GX, GX + GW), 3] = 0
+cv = Image.new("RGBA", (TW * S, H * S), (0, 0, 0, 0)); cd = SDraw(cv)
+cd.rect([0, AVE_TOP, TW, AVE_TOP + 3], fill=(150, 158, 140, 255))      # vereda de enfrente
+cd.hline(0, TW, AVE_TOP + 3, fill=(190, 196, 180, 255))                # cordón
+cd.d.rectangle([0, (AVE_TOP + 3) * S, TW * S, (AVE_TOP + 3) * S], fill=(222, 226, 212, 255))  # canto iluminado del cordón
+cd.rect([0, AVE_TOP + 4, TW, GROUND - 1], fill=(64, 70, 68, 255))     # calzada
+for lx in range(0, TW, 12):                                            # línea divisoria
+    cd.d.rectangle([lx * S, (AVE_TOP + 11) * S, (lx + 7) * S - 1, (AVE_TOP + 12) * S - 2], fill=(210, 204, 150, 255))
+cd.hline(0, TW, GROUND - 1, fill=(44, 50, 48, 255))
 # semáforo en la esquina
 sx_ = GX + GW + 2
-cd.rectangle([sx_, 40, sx_ + 1, GROUND], fill=(30, 36, 32, 255))
-cd.rectangle([sx_ - 2, 32, sx_ + 3, 42], fill=(24, 28, 26, 255))
-cd.rectangle([sx_ - 1, 33, sx_ + 2, 35], fill=(255, 60, 60, 255))
-cd.rectangle([sx_ - 1, 36, sx_ + 2, 38], fill=(60, 50, 30, 255))
-cd.rectangle([sx_ - 1, 39, sx_ + 2, 41], fill=(30, 60, 40, 255))
+cd.rect([sx_, 40, sx_ + 1, GROUND], fill=(30, 36, 32, 255))
+cd.d.rectangle([sx_ * S, 40 * S, sx_ * S, GROUND * S], fill=(58, 66, 60, 255))                     # brillo del poste
+cd.rect([sx_ - 2, 32, sx_ + 3, 42], fill=(24, 28, 26, 255))
+for k_, (yl, on) in enumerate(((33, (255, 60, 60)), (36, (60, 50, 30)), (39, (30, 60, 40)))):     # luces redondas con visera
+    cd.d.rectangle([(sx_ - 1) * S, yl * S, (sx_ + 3) * S - 1, yl * S], fill=(12, 14, 12, 255))
+    cd.d.ellipse([(sx_ - 1) * S, yl * S + 1, (sx_ + 3) * S - 1, (yl + 3) * S - 1], fill=on + (255,))
+    if k_ == 0:
+        cd.d.point(((sx_ - 1) * S + 2, yl * S + 3), fill=(255, 190, 180, 255))
 cva = np.asarray(cv, dtype=float)
 m = cva[..., 3] > 0
 near[m, :3] = cva[m, :3]; near[m, 3] = 255
@@ -752,9 +870,10 @@ def street_corridor():
             bid += 1
             z += ln + (rnd.uniform(30, 70) if rnd.random() < .12 else 0)   # a veces, otra bocacalle
 
-    SS = 3                                                # supermuestreo 3x3: bordes en diagonal sin escalones
+    SS = 2                                                # supermuestreo 2x2 por píxel dibujado: diagonales sin escalones
     rows, cols = AVE_TOP + 4, GW
-    py, px = np.meshgrid((np.arange(rows * SS) + .5) / SS, GX + (np.arange(cols * SS) + .5) / SS, indexing="ij")
+    R_, C_ = rows * S, cols * S
+    py, px = np.meshgrid((np.arange(R_ * SS) + .5) / (S * SS), GX + (np.arange(C_ * SS) + .5) / (S * SS), indexing="ij")
     dx, dy = px - VPX, py - VPY
     adx = np.abs(dx)
     sgn = np.where(dx < 0, -1, 1)
@@ -819,11 +938,11 @@ def street_corridor():
     t = 1 - np.exp(-np.clip(best - Z0, 0, None) / 1100)
     haze = np.array([196, 210, 186], float)
     fine = np.clip(rgb * (1 - t[..., None]) + haze * t[..., None], 0, 255)
-    sky_bg = np.repeat(np.repeat(far_rgb[:rows, GX:GX + GW], SS, 0), SS, 1)   # lo que se ve detrás: el cielo
+    sky_bg = np.repeat(np.repeat(far_rgb[:R_, GX * S:(GX + GW) * S], SS, 0), SS, 1)   # lo que se ve detrás: el cielo
     fine = np.where(hit[..., None], fine, sky_bg)
-    out = np.zeros((rows, cols, 4))
-    out[..., :3] = fine.reshape(rows, SS, cols, SS, 3).mean((1, 3))
-    out[..., 3] = (hit.reshape(rows, SS, cols, SS).mean((1, 3)) > 0) * 255
+    out = np.zeros((R_, C_, 4))
+    out[..., :3] = fine.reshape(R_, SS, C_, SS, 3).mean((1, 3))
+    out[..., 3] = (hit.reshape(R_, SS, C_, SS).mean((1, 3)) > 0) * 255
     return out, 0
 
 
@@ -831,31 +950,31 @@ corr, cy0 = street_corridor()
 # fila de autos esperando el semáforo (carril de mano contraria, vistos de frente con los faros prendidos)
 QW = 15                                                  # ancho de un auto a la distancia z0
 for zq, colq in sorted([(112, VEH_COLS[2]), (150, VEH_COLS[1]), (198, VEH_COLS[0]), (262, VEH_COLS[5])], reverse=True):
-    car = vehicle_end(max(4, round(QW * Z0 / zq)), colq)
-    ca = np.asarray(car, dtype=float)
-    qx = VPX + F * (-WR * .5) / zq - car.width / 2 - GX
-    qy = VPY + F * HC / zq - car.height - cy0
+    car = vehicle_end(max(4, QW * Z0 / zq), colq)
+    ca = np.asarray(car, dtype=float).copy()
+    qx = int(round((VPX + F * (-WR * .5) / zq - GX) * S - car.width / 2))
+    qy = int(round((VPY + F * HC / zq - cy0) * S - car.height))
     t_h = 1 - np.exp(-(zq - Z0) / 1100)
     ca[..., :3] = ca[..., :3] * (1 - t_h) + np.array([196, 210, 186]) * t_h
-    for yy_q in range(car.height):
-        for xx_q in range(car.width):
-            ty_, tx_ = int(qy) + yy_q, int(qx) + xx_q
-            if ca[yy_q, xx_q, 3] > 0 and 0 <= ty_ < corr.shape[0] and 0 <= tx_ < corr.shape[1]:
-                corr[ty_, tx_, :3] = ca[yy_q, xx_q, :3]; corr[ty_, tx_, 3] = 255
+    ys_q, xs_q = np.nonzero(ca[..., 3] > 0)
+    ty_, tx_ = ys_q + qy, xs_q + qx
+    ok_ = (ty_ >= 0) & (ty_ < corr.shape[0]) & (tx_ >= 0) & (tx_ < corr.shape[1])
+    corr[ty_[ok_], tx_[ok_], :3] = ca[ys_q[ok_], xs_q[ok_], :3]; corr[ty_[ok_], tx_[ok_], 3] = 255
 # alumbrado público en las veredas de la calle transversal, en perspectiva
 LS = 3                                                   # postes dibujados a 3x y reducidos (sin escalones)
+K_L = LS * S                                             # píxeles del lienzo de postes por píxel lógico
 lamp_cv = Image.new("RGBA", (corr.shape[1] * LS, corr.shape[0] * LS), (0, 0, 0, 0)); ld = ImageDraw.Draw(lamp_cv)
 for zl in sorted(np.arange(118, 2600, 95), reverse=True):
     t_h = 1 - np.exp(-(zl - Z0) / 1100)
     pole = tuple(int(v) for v in np.array([44, 50, 48]) * (1 - t_h) + np.array([196, 210, 186]) * t_h) + (255,)
     head = tuple(int(v) for v in np.array([226, 230, 210]) * (1 - t_h) + np.array([196, 210, 186]) * t_h) + (255,)
-    wdt = max(1, round(1.4 * Z0 / zl * LS))
+    wdt = max(1, round(1.4 * Z0 / zl * K_L))
     for sd in (-1, 1):
         Xl = sd * (WR + 4)
-        xb = (VPX + F * Xl / zl - GX) * LS
-        yb, yt = (VPY + F * HC / zl - cy0) * LS, (VPY + F * (HC - 34) / zl - cy0) * LS
-        xa = (VPX + F * (Xl - sd * 7) / zl - GX) * LS
-        hw, hh = 2.2 * Z0 / zl * LS, max(LS, 1.2 * Z0 / zl * LS)
+        xb = (VPX + F * Xl / zl - GX) * K_L
+        yb, yt = (VPY + F * HC / zl - cy0) * K_L, (VPY + F * (HC - 34) / zl - cy0) * K_L
+        xa = (VPX + F * (Xl - sd * 7) / zl - GX) * K_L
+        hw, hh = 2.2 * Z0 / zl * K_L, max(LS, 1.2 * Z0 / zl * K_L)
         ld.line([(xb, yb), (xb, yt)], fill=pole, width=wdt)
         ld.line([(xb, yt), (xa, yt)], fill=pole, width=wdt)
         ld.rectangle([min(xa, xa + sd * hw), yt, max(xa, xa + sd * hw), yt + hh], fill=head)
@@ -865,18 +984,21 @@ lrgb = np.where(lam > 0, la[..., :3] / np.maximum(lam, 1e-6), 0)
 corr[..., :3] = corr[..., :3] * (1 - lam) + lrgb * lam
 corr[..., 3] = np.maximum(corr[..., 3], (lam[..., 0] > .35) * 255)
 cm = corr[..., 3] > 0
-reg = near[cy0:cy0 + corr.shape[0], GX:GX + GW]
+reg = near[cy0 * S:cy0 * S + corr.shape[0], GX * S:GX * S + corr.shape[1]]
 reg[cm, :3] = corr[cm, :3]; reg[cm, 3] = 255
 
 # vereda neoyorquina: losas grandes de hormigón, cordón de granito, puertas de sótano de chapa,
 # tapas de servicio, chicles, grietas y un hidrante. Generador aparte para no alterar el resto.
 srng = np.random.default_rng(1212)
 sr = random.Random(1212)
-near[GROUND:, :, 3] = 255
+near[sl(GROUND, H), :, 3] = 255
 SW_ROWS = [GROUND + 3, H]                                               # una sola fila: losas de toda la profundidad
 SLAB = 30                                                               # ancho de losa (~1.5 m)
 grain = srng.normal(0, 1, (H, TW))
+# grano del hormigón a S x: el de siempre (manchas de un píxel lógico) más uno fino
+grainS = np.repeat(np.repeat(grain, S, 0), S, 1) * .65 + np.random.default_rng(1213).normal(0, 1, (H * S, TW * S)) * .7
 SW_OFF = 7                                                              # juntas alineadas: grilla, no ladrillo
+crack_cv = Image.new("L", (TW * S, H * S), 0); crack_d = ImageDraw.Draw(crack_cv)
 for r0, r1 in zip(SW_ROWS, SW_ROWS[1:]):
     off_ = SW_OFF
     for sx0 in range(-off_, TW, SLAB):
@@ -884,60 +1006,81 @@ for r0, r1 in zip(SW_ROWS, SW_ROWS[1:]):
         x0_, x1_ = max(0, sx0), min(TW, sx0 + SLAB)
         if x1_ <= x0_:
             continue
-        blk = np.broadcast_to(base_c, (r1 - r0, x1_ - x0_, 3)).copy()
-        blk += grain[r0:r1, x0_:x1_, None] * 3.2                        # grano del hormigón
-        vy = np.linspace(0, 1, r1 - r0)[:, None, None]
+        rs, cs = sl(r0, r1), sl(x0_, x1_)
+        nr, nc = rs.stop - rs.start, cs.stop - cs.start
+        blk = np.broadcast_to(base_c, (nr, nc, 3)).copy()
+        blk += grainS[rs, cs, None] * 3.0                               # grano del hormigón
+        vy = np.linspace(0, 1, nr)[:, None, None]
         blk *= (1.02 - .05 * vy)                                         # leve desgaste hacia el borde
-        near[r0:r1, x0_:x1_, :3] = blk
+        near[rs, cs, :3] = blk
         if sx0 >= 0:                                                    # junta vertical: sombra + borde claro
-            near[r0:r1, sx0, :3] = (100, 104, 98)
-            if sx0 + 1 < TW:
-                near[r0:r1, sx0 + 1, :3] = np.minimum(near[r0:r1, sx0 + 1, :3] + 16, 255)
+            j0 = sx0 * S
+            near[rs, j0:j0 + 2, :3] = (100, 104, 98)
+            near[rs, j0 + 2:j0 + 3, :3] = np.minimum(near[rs, j0 + 2:j0 + 3, :3] + 16, 255)
         if sr.random() < .22:                                           # grieta
             cxk, cyk = sr.uniform(x0_ + 3, max(x0_ + 4, x1_ - 3)), r0 + 1
+            prev = None
             for _ in range(int((r1 - r0) * 1.4)):
                 cyk += sr.uniform(.4, 1); cxk += sr.uniform(-1.1, 1.1)
                 if r0 <= int(cyk) < r1 and x0_ <= int(cxk) < x1_:
-                    near[int(cyk), int(cxk), :3] = (124, 126, 120)
+                    pt = (cxk * S, cyk * S)
+                    if prev is not None:
+                        crack_d.line([prev, pt], fill=255, width=1)
+                    prev = pt
+                else:
+                    prev = None
+crk = np.asarray(crack_cv) > 0
+near[crk, :3] = (124, 126, 120)
 # cordón de granito con el borde iluminado y la cuneta en sombra
-near[GROUND, :, :3] = (46, 50, 48)
-near[GROUND + 1, :, :3] = (214, 214, 206)
-near[GROUND + 2, :, :3] = (168, 170, 164) + grain[GROUND + 2, :, None] * 6
+near[sl(GROUND, GROUND + 1), :, :3] = (46, 50, 48)
+near[sl(GROUND + 1, GROUND + 2), :, :3] = (214, 214, 206)
+near[GROUND * S + S:GROUND * S + S + 1, :, :3] = (232, 232, 224)       # arista iluminada
+near[sl(GROUND + 2, GROUND + 3), :, :3] = (168, 170, 164) + grainS[sl(GROUND + 2, GROUND + 3), :, None] * 5
+near[(GROUND + 3) * S - 1, :, :3] = (150, 152, 146)                    # canto del cordón contra la vereda
 for gx_ in range(0, TW, 47):
-    near[GROUND + 1:GROUND + 3, gx_, :3] = (120, 122, 118)
+    near[sl(GROUND + 1, GROUND + 3), gx_ * S:gx_ * S + 1, :3] = (120, 122, 118)
 # chicles y manchas
 for _ in range(90):
     gx_, gy_ = sr.randrange(0, TW), sr.randrange(GROUND + 4, H)
-    near[gy_, gx_, :3] = np.array(near[gy_, gx_, :3]) * .7
+    oy_, ox_ = gy_ * S + (gx_ + gy_) % 2, gx_ * S + (gx_ * 7 + gy_) % 2
+    near[oy_:oy_ + 2, ox_:ox_ + 2, :3] = np.array(near[oy_:oy_ + 2, ox_:ox_ + 2, :3]) * .7
+SWY = centers(GROUND + 3, H)[:, None]
+SWX = centers(0, TW)[None, :]
 for _ in range(5):
     ox_, oy_, rw = sr.randrange(0, TW), sr.randrange(GROUND + 4, GROUND + 12), sr.randrange(4, 9)
-    yy_o, xx_o = np.ogrid[GROUND + 3:H, 0:TW]
-    m_o = ((xx_o - ox_) / rw) ** 2 + ((yy_o - oy_) / (rw * .35)) ** 2 < 1
-    near[GROUND + 3:H, :, :3][m_o] *= .86
+    m_o = ((SWX - ox_ - .5) / rw) ** 2 + ((SWY - oy_ - .5) / (rw * .35)) ** 2 < 1
+    near[sl(GROUND + 3, H), :, :3][m_o] *= .86
 
 
 def diamond_plate(x0, y0, w, h):
-    """Puerta de sótano de chapa diamantada (dos hojas)."""
-    yy_d, xx_d = np.mgrid[0:h, 0:w]
-    plate = np.zeros((h, w, 3)) + (120, 124, 126)
-    patt = ((xx_d + (yy_d // 2) * 2) % 4 == 0) & (yy_d % 2 == 0)
-    plate[patt] = (176, 180, 182)
-    plate[:, w // 2] = (70, 74, 76)                                      # junta entre hojas
-    plate[0, :] = (200, 204, 204); plate[-1, :] = (60, 62, 64)
-    plate[:, 0] = (190, 194, 194); plate[:, -1] = (66, 68, 70)
-    for hx_ in (2, w - 3):
-        plate[h // 3, hx_] = plate[2 * h // 3, hx_] = (50, 52, 54)      # bisagras
-    near[y0:y0 + h, x0:x0 + w, :3] = plate
+    """Puerta de sótano de chapa diamantada (dos hojas), dibujada a S x."""
+    yy_d, xx_d = np.meshgrid(centers(0, h), centers(0, w), indexing="ij")
+    plate = np.zeros(yy_d.shape + (3,)) + (120, 124, 126)
+    row_ = np.floor(yy_d / 1.2)
+    ph_ = (xx_d + (row_ % 2) * 1.0) % 2.0
+    stud = (np.abs(ph_ - 1.0) + np.abs((yy_d % 1.2) - .6) * 1.6) < .55           # rombos en relieve
+    plate[stud] = (176, 180, 182)
+    plate[stud & (yy_d % 1.2 > .6)] = (90, 94, 96)                               # sombra del relieve
+    e = 1.0 / S
+    plate[np.abs(xx_d - w / 2) < e * 1.1] = (70, 74, 76)                         # junta entre hojas
+    plate[yy_d < e * 2] = (200, 204, 204); plate[yy_d > h - e * 2] = (60, 62, 64)
+    plate[xx_d < e * 2] = (190, 194, 194); plate[xx_d > w - e * 2] = (66, 68, 70)
+    for hx_ in (1.6, w - 2.4):
+        for hy_ in (h / 3, 2 * h / 3):
+            plate[(np.abs(xx_d - hx_) < .7) & (np.abs(yy_d - hy_) < .45)] = (50, 52, 54)   # bisagras
+    near[sl(y0, y0 + h), sl(x0, x0 + w), :3] = plate
 
 
 def manhole(cx_, cy_, rx, ry):
-    yy_m, xx_m = np.ogrid[0:H, 0:TW]
-    m_ = ((xx_m - cx_) / rx) ** 2 + ((yy_m - cy_) / ry) ** 2
-    near[(m_ < 1) & (yy_m >= GROUND + 3), :3] = (88, 90, 88)
-    ring = (m_ >= .7) & (m_ < 1) & (yy_m >= GROUND + 3)
+    yy_m, xx_m = np.meshgrid(centers(0, H), centers(0, TW), indexing="ij")
+    m_ = ((xx_m - cx_ - .5) / rx) ** 2 + ((yy_m - cy_ - .5) / ry) ** 2
+    on_ = yy_m >= GROUND + 3
+    near[(m_ < 1) & on_, :3] = (88, 90, 88)
+    ring = (m_ >= .72) & (m_ < 1) & on_
     near[ring, :3] = (60, 62, 60)
-    grid_ = (m_ < .7) & ((xx_m + yy_m) % 3 == 0) & (yy_m >= GROUND + 3)
-    near[grid_, :3] = (110, 112, 108)
+    near[(m_ >= .72) & (m_ < .8) & (yy_m < cy_ + .5) & on_, :3] = (120, 122, 118)    # borde iluminado
+    grid_ = (m_ < .66) & ((((xx_m * .9 + yy_m * 2.2) % 1.5) < .42) | (((xx_m * .9 - yy_m * 2.2) % 1.5) < .42)) & on_
+    near[grid_, :3] = (112, 114, 110)
 
 
 diamond_plate(22, H - 12, 22, 9)
@@ -951,52 +1094,88 @@ manhole(120, GROUND + 7, 6, 2.4)
 #  - sendas para cruzarla en la vereda de enfrente y en la nuestra: rayas a lo largo de la calle;
 #  - sendas para cruzar la avenida a cada lado de la bocacalle (WR < |X| < WC): rayas a lo largo
 #    de la avenida, apiladas en profundidad; la línea divisoria se corta en el cruce.
-xs_all = np.arange(TW) + .5
+xs_all = centers(0, TW)
 XW_END = H + 50                                           # fin de las rayas de nuestra senda (antes de la franja negra)
-for y_ in range(AVE_TOP + 4, H):
-    f_ = (y_ + .5 - VPY) / HC
+for yr in range((AVE_TOP + 4) * S, H * S):
+    y_ = (yr + .5) / S                                   # centro de la fila dibujada, en coordenadas lógicas
+    yi = int(np.floor(y_))                               # fila lógica
+    f_ = (y_ - VPY) / HC
     Xr = (xs_all - GC) / f_                              # posición real a lo ancho de la calle del fondo
     aX = np.abs(Xr)
-    z_ = F * HC / (y_ + .5 - VPY)
+    z_ = F * HC / (y_ - VPY)
     road = aX <= WR
-    if y_ < GROUND:                                      # sobre la avenida
-        if y_ == AVE_TOP + 11:
-            near[y_, aX < WC + 2, :3] = (64, 70, 68)     # la línea divisoria se corta en el cruce
-        cross = (aX > WR + 1) & (aX < WC - 1) & ((z_ % 6) < 2.6) & (y_ > AVE_TOP + 5) & (y_ < GROUND - 1)
-        near[y_, cross, :3] = (220, 222, 210)
+    if yi < GROUND:                                      # sobre la avenida
+        if yi == AVE_TOP + 11:
+            near[yr, aX < WC + 2, :3] = (64, 70, 68)     # la línea divisoria se corta en el cruce
+        cross = (aX > WR + 1) & (aX < WC - 1) & ((z_ % 6) < 2.6) & (yi > AVE_TOP + 5) & (yi < GROUND - 1)
+        near[yr, cross, :3] = (220, 222, 210)
         # líneas de detención a ambos lados del cruce, separadas de la senda y a lo ancho de toda la avenida
         sw_ = max(2.2, 2.6 / f_)                          # ancho suficiente para que la diagonal no se corte
-        if AVE_TOP + 5 <= y_ < GROUND - 1:
+        if AVE_TOP + 5 <= yi < GROUND - 1:
             stop_av = (aX > WC + 5) & (aX <= WC + 5 + sw_)
-            near[y_, stop_av, :3] = (236, 238, 228)
+            near[yr, stop_av, :3] = (236, 238, 228)
     else:                                                # nuestra vereda: en coordenadas de suelo (escala del cordón)
         f_ = (GROUND - VPY) / HC
         Xr = (xs_all - GC) / f_
         aX = np.abs(Xr)
         road = aX <= WR
-        near[y_, road, :3] = (70, 76, 74)
-        if GROUND + 2 <= y_ < XW_END:
+        near[yr, road, :3] = (70, 76, 74) + grainS[yr, road, None] * 2.5
+        if GROUND + 2 <= yi < XW_END:
             stripe = zebra(Xr)
-            near[y_, stripe, :3] = (226, 228, 214)
-        elif XW_END + 4 <= y_ < XW_END + 6:                # línea de detención, separada y a lo ancho de la calle
-            near[y_, aX < WR - .5, :3] = (236, 238, 228)
-        curb = (aX > WR) & (aX <= WR + max(.8, 1.2 / f_))
-        near[y_, curb, :3] = (200, 202, 196)
+            near[yr, stripe, :3] = (226, 228, 214) + grainS[yr, stripe, None] * 2.5
+        elif XW_END + 4 <= yi < XW_END + 6:                # línea de detención, separada y a lo ancho de la calle
+            near[yr, aX < WR - .5, :3] = (236, 238, 228)
+        curb = (aX > WR) & (aX <= WR + 2.6)                # cordón de la calle del fondo (ancho: no se corta en diagonal)
+        near[yr, curb, :3] = (200, 202, 196) + grainS[yr, curb, None] * 3
+        near[yr, (aX > WR) & (aX <= WR + .7), :3] = (150, 152, 146)   # canto hacia la calzada
+
+
+def hydrant(res=S):
+    """Hidrante neoyorquino: tapa en cúpula con tuerca, collar, bocas laterales con cadena, base con brida."""
+    K = 4 * res
+    big = Image.new("RGBA", (9 * K, 14 * K), (0, 0, 0, 0)); d = ImageDraw.Draw(big)
+    R = lambda x0, y0, x1, y1, c: d.rectangle([x0 * K, y0 * K, x1 * K - 1, y1 * K - 1], fill=c)
+    red, hi, sh, dk = (178, 38, 40), (226, 104, 96), (134, 26, 30), (96, 18, 22)
+    R(1.2, 12.6, 7.8, 14, dk)                                            # brida de la base
+    R(1.6, 12.2, 7.4, 12.8, sh)
+    R(2.2, 4.8, 6.8, 12.4, red)                                          # cuerpo
+    R(2.2, 4.8, 3.2, 12.4, hi)                                           # brillo (luz de la izquierda)
+    R(5.8, 4.8, 6.8, 12.4, sh)
+    d.ellipse([2.2 * K, 1.4 * K, 6.8 * K, 6.2 * K], fill=red)            # cúpula
+    d.ellipse([2.8 * K, 1.9 * K, 4.4 * K, 3.9 * K], fill=hi)
+    R(3.8, .2, 5.2, 1.8, sh)                                             # tuerca de maniobra
+    R(3.8, .2, 4.2, 1.8, red)
+    R(1.8, 4.4, 7.2, 5.2, sh)                                            # collar
+    R(1.8, 4.4, 7.2, 4.7, red)
+    for x0_ in (0, 6.8):                                                 # bocas laterales con tapa
+        R(x0_, 6.6, x0_ + 2.2, 8.2, red)
+        R(x0_ + (0 if x0_ == 0 else 1.6), 6.4, x0_ + (.6 if x0_ == 0 else 2.2), 8.4, sh)
+    d.ellipse([3.3 * K, 6.9 * K, 5.7 * K, 9.3 * K], fill=sh)             # boca de bomberos (de frente)
+    d.ellipse([3.8 * K, 7.4 * K, 5.2 * K, 8.8 * K], fill=red)
+    d.line([(1.2 * K, 8.2 * K), (2.4 * K, 9.6 * K), (3.4 * K, 9.0 * K)], fill=(70, 70, 74), width=max(1, K // 3))   # cadena
+    return _finish(big, 9 * res, 14 * res)
+
+
 # hidrante junto al cordón (después de las sendas: queda por delante)
 HX, HB = GX - 30, GROUND + 3                             # pegado al cordón
-hyd = Image.new("RGBA", (9, 14), (0, 0, 0, 0)); hd = ImageDraw.Draw(hyd)
-hd.rectangle([2, 4, 6, 12], fill=(176, 40, 40)); hd.rectangle([1, 12, 7, 13], fill=(140, 30, 30))
-hd.ellipse([2, 1, 6, 5], fill=(190, 48, 48)); hd.rectangle([3, 0, 5, 1], fill=(150, 34, 34))
-hd.rectangle([0, 6, 8, 7], fill=(160, 36, 36)); hd.point((4, 3), fill=(230, 120, 110))
-hd.rectangle([2, 5, 2, 11], fill=(214, 90, 84))
+hyd = hydrant()
 # (va en su propia capa, ordenada por profundidad; ver más abajo)
+
+
+def lamp_post(px):
+    """Poste de alumbrado sobre la vereda de enfrente: caño con brillo y brazo."""
+    near[sl(30, GROUND + 2), sl(px, px + 2), :3] = (40, 48, 44); near[sl(30, GROUND + 2), sl(px, px + 2), 3] = 255
+    near[sl(30, GROUND + 2), px * S + 1:px * S + 2, :3] = (70, 80, 74)                 # brillo del caño
+    near[sl(30, 32), sl(px - 4, px + 6), :3] = (40, 48, 44); near[sl(30, 32), sl(px - 4, px + 6), 3] = 255
+    near[30 * S:30 * S + 1, sl(px - 4, px + 6), :3] = (70, 80, 74)
+    near[sl(32, 33), sl(px - 4, px - 1), :3] = (214, 218, 200); near[sl(32, 33), sl(px - 4, px - 1), 3] = 255   # luminaria
+
+
 for _ in range(3):                                                      # postes / farolas
     px = random.choice([random.randrange(10, GX - 12), random.randrange(GX + GW + 8, W - 10)])
-    near[30:GROUND + 2, px:px + 2, :3] = (40, 48, 44); near[30:GROUND + 2, px:px + 2, 3] = 255
-    near[30:32, px - 4:px + 6, :3] = (40, 48, 44); near[30:32, px - 4:px + 6, 3] = 255
+    lamp_post(px)
 for px in (372, 468, 566):                                              # postes de la cuadra nueva
-    near[30:GROUND + 2, px:px + 2, :3] = (40, 48, 44); near[30:GROUND + 2, px:px + 2, 3] = 255
-    near[30:32, px - 4:px + 6, :3] = (40, 48, 44); near[30:32, px - 4:px + 6, 3] = 255
+    lamp_post(px)
 
 
 # ---------- vegetación
@@ -1004,12 +1183,13 @@ TREE_PAL = [(150, 184, 46), (104, 152, 34), (62, 116, 40), (34, 84, 52), (20, 54
 BARK = [(156, 96, 74), (116, 66, 54), (80, 44, 42), (52, 28, 32)]
 
 
-def street_tree(height, seed, young=True, parts=False):
+def street_tree(height, seed, young=True, parts=False, res=S):
     """Árbol de vereda en pixel art (estilo de referencia): copa hecha de masas de follaje con bandas de
     sombreado planas (lima arriba, verde azulado casi negro abajo) y bordes dentados de hojas; tronco
-    marrón rojizo retorcido que se abre en ramas entre las masas. Dibujado a resolución final."""
+    marrón rojizo retorcido que se abre en ramas entre las masas. Dibujado a resolución final
+    (height en píxeles lógicos, el raster sale a `res` x)."""
     rt = random.Random(seed)
-    Ht = int(height)
+    Ht = int(height * res)
     Wt = int(Ht * .72) | 1
     cxt = Wt / 2
     mir = -1 if rt.random() < .5 else 1
@@ -1025,7 +1205,10 @@ def street_tree(height, seed, young=True, parts=False):
                 for x, y, rx, ry in lst]
     back, front = place(back), place(front)
     yy_, xx_ = np.mgrid[0:Ht, 0:Wt].astype(float)
-    nz = np.random.default_rng(seed).random((Ht, Wt))
+    nrg = np.random.default_rng(seed)
+    # ruido de hojas: grumos de ~1 píxel lógico más un grano fino (hojitas sueltas a S x)
+    coarse = nrg.random((Ht // res + 2, Wt // res + 2))
+    nz = np.repeat(np.repeat(coarse, res, 0), res, 1)[:Ht, :Wt] * .62 + nrg.random((Ht, Wt)) * .38
 
     def render(clumps, darker=0.0):
         rgba = np.zeros((Ht, Wt, 4))
@@ -1057,12 +1240,16 @@ def street_tree(height, seed, young=True, parts=False):
                 (base_x - .035 * Ht, Ht - .04 * Ht)], fill=BARK[1])                      # raíces
     ta = np.asarray(timg, dtype=float)
     tm = ta[..., 3] > 0
-    left = tm & ~np.roll(tm, 1, 1)
-    right = tm & ~np.roll(tm, -1, 1)
+    ew = max(1, round(res * .67))                                                     # ancho de los cantos
+    lit_e = tm & ~np.roll(tm, ew + 1, 1)                                             # franja junto al borde izquierdo
+    sh_e = tm & ~np.roll(tm, -(ew + 1), 1)                                             # franja junto al borde derecho
+    edge_l = tm & ~np.roll(tm, 1, 1)
     tr[tm, :3] = BARK[1]
-    tr[np.roll(left, 1, 1) & tm, :3] = BARK[0]                                         # canto iluminado
-    tr[right | np.roll(right, -1, 1) & tm, :3] = BARK[2]                                # lado en sombra
-    streak = tm & (nz < .18)
+    tr[lit_e & ~edge_l, :3] = BARK[0]                                                  # canto iluminado
+    tr[edge_l, :3] = BARK[2]                                                           # contorno
+    tr[sh_e, :3] = BARK[2]                                                             # lado en sombra
+    bark_n = np.repeat(np.repeat(coarse, res, 0), res, 1)[:Ht, :Wt]
+    streak = tm & (bark_n < .18) & ((xx_ + yy_ * .15) % (res * 1.6) < res)              # vetas de la corteza
     tr[streak, :3] = BARK[2]
     tr[tm & (nz > .93), :3] = BARK[3]
     tr[tm, 3] = 255
@@ -1075,8 +1262,12 @@ def street_tree(height, seed, young=True, parts=False):
         ys_, xs_ = np.nonzero(lit)
         for fl_ in (flick, flick2):                                                      # hojas que se dan vuelta
             sel = rt.sample(range(len(ys_)), min(len(ys_), Ht // 2))
-            fl_[ys_[sel], xs_[sel], :3] = TREE_PAL[0]
-            fl_[ys_[sel], xs_[sel], 3] = 255
+            for dy_ in range(max(1, res // 2) + 1):                                     # hojitas de ~2/3 de píxel lógico
+                for dx_ in range(max(1, res // 2) + 1):
+                    yq, xq = np.minimum(ys_[sel] + dy_, Ht - 1), np.minimum(xs_[sel] + dx_, Wt - 1)
+                    ok_ = front_l[yq, xq, 3] > 0
+                    fl_[yq[ok_], xq[ok_], :3] = TREE_PAL[0]
+                    fl_[yq[ok_], xq[ok_], 3] = 255
         crown = back_l.copy()
         trunk = tr
         # el tronco va entre las masas de atrás y las de adelante; para que la copa se mezca entera,
@@ -1088,9 +1279,9 @@ def street_tree(height, seed, young=True, parts=False):
     return to_im(out)
 
 
-def planter(width, seed):
+def planter(width, seed, res=S):
     """Macetón de piedra con un arbusto (para las entradas monumentales)."""
-    S4 = 4
+    S4 = 4 * res
     im = Image.new("RGBA", (width * S4, int(width * 1.3) * S4), (0, 0, 0, 0)); d = ImageDraw.Draw(im)
     W4, H4 = width * S4, im.height
     d.rectangle([W4 * .1, H4 * .55, W4 * .9, H4 - 1], fill=(196, 192, 182))
@@ -1100,14 +1291,15 @@ def planter(width, seed):
         x_, y_ = rp.uniform(.15, .85) * W4, rp.uniform(.12, .5) * H4
         r_ = rp.uniform(.12, .2) * W4
         d.ellipse([x_ - r_, y_ - r_, x_ + r_, y_ + r_], fill=rp.choice([(52, 96, 52), (70, 116, 60), (90, 136, 70)]))
-    return _finish(im, width, int(H4 / S4))
+    return _finish(im, width * res, int(H4 / 4))
 
 
 def bake(im, x0, base_y):
+    """Pega un sprite (a S x) en el tile: x0 y base_y lógicos; la última fila cae en la fila lógica base_y."""
     a_ = np.asarray(im, dtype=float)
     ys_, xs_ = np.nonzero(a_[..., 3] > 0)
-    ty, tx = ys_ + int(base_y - im.height + 1), (xs_ + int(x0)) % TW
-    ok = (ty >= 0) & (ty < H)
+    ty, tx = ys_ + int(round(base_y * S + S - im.height)), (xs_ + int(round(x0 * S))) % (TW * S)
+    ok = (ty >= 0) & (ty < H * S)
     near[ty[ok], tx[ok], :3] = a_[ys_[ok], xs_[ok], :3]
     near[ty[ok], tx[ok], 3] = 255
 
@@ -1115,30 +1307,38 @@ def bake(im, x0, base_y):
 FAR_TREE_H = 66                                              # ~5 m a la distancia de la vereda de enfrente
 for i_, tx_ in enumerate((296, 430, 560)):                # lejos de la pantalla LED y de la esquina
     t_im = street_tree(FAR_TREE_H, 50 + i_)
-    bake(t_im, tx_ - t_im.width / 2, AVE_TOP + 2)
+    bake(t_im, tx_ - lw(t_im) / 2, AVE_TOP + 2)
 for bi_ in (0, 5):                                           # macetones a los lados de las entradas monumentales
     bx_, bw_ = blds[bi_][0], blds[bi_][1]
     for side_ in (-1, 1):
         pl = planter(7, 70 + bi_ * 2 + side_)
-        bake(pl, bx_ + bw_ / 2 + side_ * 23 - pl.width / 2, AVE_TOP + 1)
+        bake(pl, bx_ + bw_ / 2 + side_ * 23 - lw(pl) / 2, AVE_TOP + 1)
 OUR_TREES = (24, 458, 612)                                  # (los canteros van en la capa del árbol)
 
 # latas de gaseosa tiradas en la vereda de la cuadra larga (en el piso, toman la perspectiva)
 CANS = [(20, 101, (200, 30, 40)), (62, 104, (40, 90, 190)), (118, 99, (200, 30, 40)), (330, 103, (210, 210, 214)),
         (402, 100, (40, 140, 70)), (455, 105, (200, 30, 40)), (512, 101, (210, 210, 214)), (602, 99, (40, 90, 190))]
-for cx_c, cy_c, cc in CANS:
-    near[cy_c + 2, cx_c:cx_c + 5, :3] = np.array(near[cy_c + 2, cx_c:cx_c + 5, :3]) * .72   # sombra
-    near[cy_c:cy_c + 2, cx_c:cx_c + 4, :3] = cc                         # cuerpo de la lata (acostada)
-    near[cy_c, cx_c:cx_c + 4, :3] = np.minimum(np.array(cc) + 60, 255)  # brillo
-    near[cy_c:cy_c + 2, cx_c + 4, :3] = (210, 212, 216)                 # tapa de aluminio
-    near[cy_c + 1, cx_c + 4, :3] = (150, 152, 156)
-near_rgb = posterize(np.clip(near[..., :3], 0, 255), 64, 6)
+for cx_c, cy_c, cc in CANS:                                             # lata acostada: cilindro con brillo y tapa
+    cyy, cxx = np.meshgrid(centers(cy_c, cy_c + 3), centers(cx_c, cx_c + 5), indexing="ij")
+    reg_ = near[sl(cy_c, cy_c + 3), sl(cx_c, cx_c + 5), :3]
+    shadow = (cyy > cy_c + 1.7) & (cxx > cx_c + .3)
+    reg_[shadow] *= .72                                                 # sombra
+    bodyc = (cyy < cy_c + 2) & (cxx < cx_c + 4)
+    tc = (cyy - cy_c) / 2                                               # 0 arriba .. 1 abajo
+    shade_ = np.clip(1.25 - np.abs(tc - .3) * 1.1, .55, 1.25)
+    reg_[bodyc] = (np.array(cc)[None] * shade_[bodyc][:, None]).clip(0, 255)
+    reg_[bodyc & (np.abs(tc - .22) < .1)] = np.minimum(np.array(cc) + 80, 255)    # brillo
+    reg_[bodyc & ((cxx - cx_c) % 4 > 3.55)] *= .8                       # borde del fondo
+    lid = (cyy < cy_c + 2) & (cxx >= cx_c + 4) & (cxx < cx_c + 4.8)
+    reg_[lid] = (210, 212, 216)
+    reg_[lid & (cyy > cy_c + 1.1)] = (150, 152, 156)
+near_rgb = posterize(np.clip(near[..., :3], 0, 255), 128, 5)
 near_full = np.dstack([near_rgb, near[..., 3]]).astype(np.uint8)
 near_im = Image.fromarray(near_full, "RGBA")           # (completo, para inspección)
-top_arr = near_full.copy(); top_arr[GROUND:, :, 3] = 0
-tile = image(Image.fromarray(top_arr, "RGBA"), up=1) + image(Image.fromarray(top_arr, "RGBA"), x=-TW, up=1)
+top_arr = near_full.copy(); top_arr[GROUND * S:, :, 3] = 0
+tile = image(Image.fromarray(top_arr, "RGBA")) + image(Image.fromarray(top_arr, "RGBA"), x=-TW)
 # franja de nuestra vereda (en coordenadas de suelo), que se dibuja aparte con perspectiva
-band_im = Image.fromarray(near_full[GROUND:], "RGBA")
+band_im = Image.fromarray(near_full[GROUND * S:], "RGBA")
 # fase del tile: al congelar, la senda queda justo debajo de Claude y Lucas (x ≈ 93..185)
 TILE0 = 93 - GX - NEAR_SPEED * F0
 body.append(f'<g style="{track(TILE0, NEAR_SPEED, TW, 0, 0)}">{tile}</g>')
@@ -1218,7 +1418,7 @@ def led(img):
 
 led_b = next(b for i_, b in enumerate(blds) if i_ == 1)
 lx0, ly0 = led_b[0] + LED_U0, AVE_TOP - LED_V1
-lw, lh = LED_U1 - LED_U0, LED_V1 - LED_V0
+led_w, led_h = LED_U1 - LED_U0, LED_V1 - LED_V0
 frames_led = [led(coke_frame(k)) for k in range(4)]
 uri = lambda im_: png_uri(im_)
 LCYC = 7.5
@@ -1230,16 +1430,16 @@ for k, t0, t1 in sched:
     css.append(f"@keyframes {kk}{{0%,{max(a0 - .01, 0):.2f}%{{opacity:{1 if k == 0 else 0}}}{a0:.2f}%{{opacity:1}}"
                f"{a0 + 1.2:.2f}%{{opacity:.55}}{a0 + 2.4:.2f}%,{a1 - .01:.2f}%{{opacity:1}}{a1:.2f}%,100%{{opacity:0}}}}"
                if k else f"@keyframes {kk}{{0%,{a1 - .01:.2f}%{{opacity:1}}{a1:.2f}%,100%{{opacity:0}}}}")
-    led_imgs.append(f'<image x="{lx0}" y="{ly0}" width="{lw}" height="{lh}" preserveAspectRatio="none" '
+    led_imgs.append(f'<image x="{lx0}" y="{ly0}" width="{led_w}" height="{led_h}" preserveAspectRatio="none" '
                     f'href="{uri(frames_led[k])}" style="animation:{kk} {LCYC}s infinite steps(1)"/>')
 css.append("@keyframes ledscan{0%{transform:translateY(0)}100%{transform:translateY(22px)}}")
-scan = (f'<clipPath id="ledclip"><rect x="{lx0}" y="{ly0}" width="{lw}" height="{lh}"/></clipPath>')
+scan = (f'<clipPath id="ledclip"><rect x="{lx0}" y="{ly0}" width="{led_w}" height="{led_h}"/></clipPath>')
 defs.append(scan)
-glow = (f'<ellipse cx="{lx0 + lw / 2}" cy="{ly0 + lh / 2}" rx="{lw * .75}" ry="{lh * 1.1}" fill="#ff2030" opacity=".10"/>')
+glow = (f'<ellipse cx="{lx0 + led_w / 2}" cy="{ly0 + led_h / 2}" rx="{led_w * .75}" ry="{led_h * 1.1}" fill="#ff2030" opacity=".10"/>')
 led_layer = (f'<g style="animation:walkvis {T}s infinite linear">{glow}{"".join(led_imgs)}'
-             f'<g clip-path="url(#ledclip)"><rect x="{lx0}" y="{ly0 - 3}" width="{lw}" height="2" fill="#fff" opacity=".10" '
+             f'<g clip-path="url(#ledclip)"><rect x="{lx0}" y="{ly0 - 3}" width="{led_w}" height="2" fill="#fff" opacity=".10" '
              f'style="animation:ledscan 2.2s infinite linear"/></g></g>'
-             f'<g opacity="0" style="animation:frzvis {T}s infinite linear"><image x="{lx0}" y="{ly0}" width="{lw}" height="{lh}" preserveAspectRatio="none" '
+             f'<g opacity="0" style="animation:frzvis {T}s infinite linear"><image x="{lx0}" y="{ly0}" width="{led_w}" height="{led_h}" preserveAspectRatio="none" '
              f'href="{uri(frames_led[0])}"/></g>')
 led_layer = "".join(f'<g transform="translate({off} 0)">{led_layer}</g>' for off in (0, -TW))
 body.append(f'<g style="{track(TILE0, NEAR_SPEED, TW, 0, 0)}">{led_layer}</g>')
@@ -1249,7 +1449,7 @@ body.append(f'<g style="{track(TILE0, NEAR_SPEED, TW, 0, 0)}">{led_layer}</g>')
 # la senda fugan hacia el centro y se abren hacia abajo, como si la vereda siguiera bajo el cuadro.
 # El ciclo cierra igual: en cada fila el desplazamiento por vuelta es exactamente un tile escalado.
 band_id = nid("band")
-defs.append(f'<g id="{band_id}">{image(band_im, 0, 0, up=1)}{image(band_im, -TW, 0, up=1)}</g>')
+defs.append(f'<g id="{band_id}">{image(band_im, 0, 0)}{image(band_im, -TW, 0)}</g>')
 band_rows = []
 for r_ in range(H - GROUND):
     y_r = GROUND + r_
@@ -1282,13 +1482,284 @@ def gait_legs(phase, legL, A):
     return legs
 
 
-def figure(h, frame, look, pose="walk", phase=None, amp=None):
+# ============================================================ cabezas de perfil (a S x)
+def _mix(a, b, t):
+    return tuple(int(round(a_ * (1 - t) + b_ * t)) for a_, b_ in zip(a[:3], b[:3]))
+
+
+def _sh(c, k, add=0):
+    return tuple(int(max(0, min(255, v * k + add))) for v in c[:3])
+
+
+def face_traits(look):
+    """Rasgos que el look no trae (nariz, mentón, cejas, anteojos, bigote, peinado), fijos por persona.
+    Salen de un hash del look: no consumen la secuencia aleatoria de la escena."""
+    hsh = stable_hash(tuple(sorted((k, repr(v)) for k, v in look.items())))
+    r = random.Random(hsh)
+    fem = bool(look.get("female"))
+    t = dict(nose=r.uniform(.8, 1.0) if fem else r.uniform(.95, 1.35), chin=r.uniform(-.06, .08),
+             brow=1 if fem else r.choice([1, 2, 2]), glasses=None, style=look.get("hair_style"),
+             mustache=False, iris=r.choice([(46, 30, 22), (34, 26, 22), (54, 74, 92), (64, 80, 52)]),
+             lipstick=r.random() < .45)
+    if not look.get("shades") and not look.get("cap") and r.random() < (.16 if fem else .22):
+        t["glasses"] = r.choice([(26, 26, 30), (110, 64, 36), (168, 172, 176)])
+    if not t["style"]:
+        if fem:
+            t["style"] = ("long" if look.get("long_hair") else "bun" if look.get("bun")
+                          else "ponytail" if look.get("ponytail") else "bob")
+        elif look.get("curly"):
+            t["style"] = "curly"
+        elif tuple(look["hair"]) == (150, 140, 130):                    # canoso
+            t["style"] = r.choice(["bald", "bald", "short"])
+        else:
+            t["style"] = r.choice(["short", "short", "side", "side", "buzz", "curly"])
+    if not fem and look.get("beard") and r.random() < .45:
+        t["mustache"] = True
+    return t
+
+
+def head_patch(u, look, hx, hy, phase=0.0, facing=1, traits=None):
+    """Cabeza de perfil con cara legible: ojo (párpado, iris, blanco), ceja, nariz, boca, oreja, mentón,
+    peinado con brillo y sombra, barba, anteojos y gorras. Mira a la izquierda (facing=1) o a la derecha (-1).
+    (hx, hy): centro del cráneo en el lienzo destino, u: unidad de la figura (alto / 24).
+    Devuelve (parche RGBA, x0, y0) alineado a la grilla del lienzo."""
+    tr = traits or face_traits(look)
+    fem = bool(look.get("female"))
+    skin, hair = tuple(look["skin"][:3]), tuple(look["hair"][:3])
+    skin_sh, skin_dk, skin_hi = _sh(skin, .82), _sh(skin, .66), _sh(skin, 1.06, 8)
+    hair_hi, hair_sh = _sh(hair, 1.4, 26), _sh(hair, .62)
+    style = tr["style"]
+    flow = .25 * np.sin(2 * np.pi * phase + 1)                     # vaivén del pelo largo / colita
+    x0, y0 = int(np.floor(hx - 3.0 * u)), int(np.floor(hy - 2.9 * u))
+    x1, y1 = int(np.ceil(hx + 3.0 * u)), int(np.ceil(hy + 4.0 * u))
+    jj, ii = np.mgrid[0:y1 - y0, 0:x1 - x0]
+    X = (ii + x0 + .5 - hx) / u * facing                            # + hacia la nuca, - hacia la cara
+    Y = (jj + y0 + .5 - hy) / u
+    out = np.zeros(X.shape + (4,))
+    gx_, gy_ = ii + x0, jj + y0                                     # grilla absoluta: el grano no "camina" con la cara
+    grain_ = ((gx_ * 73 + gy_ * 151 + (gx_ * gy_) % 7 * 31) % 97) / 97.0   # ruido fijo por píxel (0..1)
+
+    def paint(mask, col):
+        out[mask, :3] = col[:3]
+        out[mask, 3] = 255
+
+    def pix(xl, yl, col):                                           # un píxel en coordenadas locales (u)
+        i_ = int(np.floor(hx + xl * u * facing - x0)); j_ = int(np.floor(hy + yl * u - y0))
+        if 0 <= j_ < out.shape[0] and 0 <= i_ < out.shape[1]:
+            out[j_, i_, :3] = col[:3]; out[j_, i_, 3] = 255
+
+    def run(xa, xb, yl, col):                                       # tramo horizontal de un píxel de alto
+        n_ = max(1, int(round(abs(xb - xa) * u)))
+        for k_ in range(n_ + 1):
+            pix(xa + (xb - xa) * k_ / max(1, n_), yl, col)
+
+    # --- perfil: borde de la cara (x más adelantada) para cada altura
+    n, ch = tr["nose"], tr["chin"]
+    py_ = [-1.75, -1.2, -.62, -.42, -.18, .02, .40, .52, .60, .74, .86, .98, 1.18, 1.38, 1.6]
+    px_ = [-1.1, -1.42, -1.52, -1.58, -1.46, -1.6, -1.6 - .3 * n, -1.55 - .27 * n, -1.56, -1.62, -1.5,
+           -1.58 if fem else -1.55, -1.45, -1.5 - ch, -1.24 - ch]
+    front = np.interp(Y, py_, px_)
+    jaw = np.interp(X, [-1.7, -1.24 - ch, -.5, .25, .75, 1.05], [1.4, 1.6, 1.64, 1.3, .8, .45])
+    if fem:
+        jaw = np.interp(X, [-1.7, -1.2 - ch, -.5, .25, .75, 1.05], [1.35, 1.52, 1.52, 1.22, .8, .45])
+    face = (Y >= -1.75) & (X >= front) & (X <= 1.0) & (Y <= jaw)
+    skull = ((X - .05) / 1.5) ** 2 + ((Y + .12) / 1.82) ** 2 < 1
+    neck = (X >= -.5) & (X <= .72) & (Y > .9) & (Y <= 1.6)
+    headm = skull | face
+    paint(neck, skin_sh)
+    paint(neck & (X < 0), skin)
+    paint(headm, skin)
+    paint(neck & ~headm & (Y < np.interp(X, [-.5, .72], [1.85, 1.5])), skin_sh)   # sombra bajo la mandíbula
+    paint(headm & (X < front + .3) & (Y > -1.55) & (Y < -.7), skin_hi)          # frente iluminada
+    paint(headm & (X < front + .22) & (Y > .05) & (Y < .38), skin_hi)           # caballete de la nariz
+    paint(headm & (Y > .5) & (Y < .64) & (X < -1.42), skin_sh)                  # sombra bajo la nariz
+    paint(headm & (Y > jaw - .2) & (X > -1.0), skin_sh)                         # borde de la mandíbula
+    if fem:
+        paint(headm & (X > -1.2) & (X < -.75) & (Y > .22) & (Y < .55), _mix(skin, (232, 120, 120), .22))  # rubor
+    # oreja
+    ear = ((X - .4) / .3) ** 2 + ((Y - .12) / .44) ** 2 < 1
+    paint(ear, skin_sh)
+    paint(((X - .44) / .14) ** 2 + ((Y - .14) / .26) ** 2 < 1, skin_dk)
+    paint(ear & (X < .22), skin)
+
+    # --- pelo
+    def hairline(pts_x, pts_y):
+        return np.interp(X, pts_x, pts_y)
+
+    HLX = [-1.8, -1.05, -.45, -.06, .12, .7, .95, 1.35]
+    hair_m = np.zeros(X.shape, bool)
+    tex = np.zeros(X.shape, bool)                                    # zonas de rulo (textura)
+    if style in ("short", "side", "buzz", "slick", "bald"):
+        rx_, ry_, cy_ = {"short": (1.62, 1.97, -.2), "side": (1.66, 2.05, -.28), "buzz": (1.55, 1.88, -.14),
+                         "slick": (1.59, 1.93, -.17), "bald": (1.6, 1.94, -.16)}[style]
+        E = ((X - .07) / rx_) ** 2 + ((Y - cy_) / ry_) ** 2 < 1
+        top = -1.16 if style == "slick" else -1.02
+        hl = hairline(HLX, [top, top - .04, -.95, -.6, -.34, -.34, .34, .95])
+        hair_m = E & (Y < hl)
+        hair_m |= (X > -.07) & (X < .16) & (Y >= -.45) & (Y < .28) & headm      # patilla
+        if style == "bald":
+            hair_m &= (X > .25) & (Y > -.95)
+    elif style in ("curly", "curly_big"):
+        big = style == "curly_big"
+        rx_, ry_, cx_, cy_ = (2.0, 2.3, .16, -.45) if big else (1.78, 2.1, .1, -.32)
+        ang = np.arctan2(Y - cy_, X - cx_)
+        rr = np.sqrt(((X - cx_) / rx_) ** 2 + ((Y - cy_) / ry_) ** 2)
+        E = rr < 1 + .075 * np.sin(ang * 11 + 1.3) + .04 * np.sin(ang * 23)
+        hl = hairline(HLX, [-.9, -.98, -.9, -.58, -.3, -.3, .4, 1.0] if big else [-.98, -1.0, -.92, -.6, -.32, -.32, .36, .95])
+        hair_m = E & (Y < hl)
+        hair_m |= (X > -.07) & (X < .16) & (Y >= -.45) & (Y < .3) & headm
+        if big:                                                     # mechón que cae sobre la frente
+            hair_m |= (((X + 1.28) / .34) ** 2 + ((Y + .86) / .42) ** 2 < 1) & (X > front - .1)
+        tex = hair_m & (np.sin((X * 1.0 + Y * .35) * 8.2) * np.sin((Y - X * .3) * 8.2) > .28)
+    elif style in ("long", "bob", "ponytail", "bun"):
+        E = ((X - .12) / 1.7) ** 2 + ((Y + .18) / 2.0) ** 2 < 1
+        hl = hairline(HLX, [-.72, -.9, -1.02, -.66, -.36, -.36, .3, .9])   # flequillo de costado
+        hair_m = E & (Y < hl)
+        hair_m |= (X > -.07) & (X < .2) & (Y >= -.45) & (Y < .1) & headm
+        if style == "long":
+            back_x = 1.62 + .1 * np.clip(Y, 0, 3.4) + flow * np.clip(Y / 3, 0, 1)
+            fall = (X > .32 + .06 * np.clip(Y, 0, 3)) & (X < back_x) & (Y > -.8) & (Y < 3.35 - .25 * (X - .3))
+            hair_m |= fall
+        elif style == "bob":
+            hair_m |= (X > .25) & (X < 1.7) & (Y > -.8) & (Y < 1.35 - .1 * X)
+        elif style == "ponytail":
+            sw_ = .3 * np.sin(2 * np.pi * phase)
+            p0, p1 = np.array([1.35, -1.05]), np.array([2.05 + sw_, 1.75])
+            t_ = np.clip(((X - p0[0]) * (p1[0] - p0[0]) + (Y - p0[1]) * (p1[1] - p0[1])) / np.sum((p1 - p0) ** 2), 0, 1)
+            dd = np.hypot(X - (p0[0] + t_ * (p1[0] - p0[0])), Y - (p0[1] + t_ * (p1[1] - p0[1])))
+            tail = dd < .38 - .22 * t_
+            hair_m |= tail
+            tie = (dd < .42) & (t_ < .08)
+        else:
+            hair_m |= ((X - 1.42) / .62) ** 2 + ((Y + 1.42) / .6) ** 2 < 1
+    paint(hair_m, hair)
+    # brillo arriba y adelante, sombra en la nuca
+    lit = hair_m & (X * .55 + Y > -2.05) & (X * .55 + Y < -1.72) & (X < .55)
+    paint(lit, hair_hi)
+    paint(hair_m & ((X > 1.05) | (Y > .35)) & ~lit, hair_sh)
+    if style == "side":
+        paint(hair_m & (np.abs(X + .25) < .09) & (Y < -1.45), hair_sh)                 # raya al costado
+    if style == "slick":
+        paint(hair_m & (np.abs(X * .5 + Y + 1.55) < .07), _sh(hair, 1.8, 40))          # gel
+    if style == "buzz":
+        paint(hair_m & (grain_ < .45), _mix(hair, skin, .3))
+    if style == "bald":
+        paint(headm & ~hair_m & (((X + .55) / .45) ** 2 + ((Y + 1.35) / .25) ** 2 < 1), _sh(skin, 1.12, 14))  # brillo
+    if tex.any():
+        paint(tex, hair_hi)
+        paint(hair_m & (np.sin((X * 1.0 + Y * .35) * 8.2 + 1.6) * np.sin((Y - X * .3) * 8.2 + 1.6) > .55) & ~tex, hair_sh)
+    if style == "ponytail":
+        paint(tie, (200, 60, 80) if hair[0] < 150 else (60, 60, 140))
+    if style == "bun":
+        paint(hair_m & (((X - 1.42) / .62) ** 2 + ((Y + 1.42) / .6) ** 2 < 1) & (np.sin(X * 9 + Y * 6) > .4), hair_hi)
+
+    # --- barba
+    if look.get("beard"):
+        bcol = look["beard"]
+        bm = headm & (X < .62 - .5 * np.clip(Y - .75, 0, 1)) & (Y > .48) & ~((Y < .6) & (X < -1.4))
+        bm |= headm & (X > -.12) & (X < .3) & (Y > -.1) & (Y <= .6)                  # une con la patilla
+        if look.get("stubble"):                                                      # barba de días: sombra + puntitos
+            paint(bm, _mix(skin, bcol, .34))
+            paint(bm & (grain_ < .38), _mix(skin, bcol, .62))
+            paint(bm & (Y > jaw - .22), _mix(skin, bcol, .55))
+        else:
+            paint(bm, bcol)
+            paint(bm & (Y > jaw - .18), _sh(bcol, .75))
+    elif tr["mustache"]:
+        paint(headm & (Y > .6) & (Y < .78) & (X < -1.05), hair_sh)
+
+    # --- rasgos (píxel a píxel: tienen que leerse a 1-2 px)
+    ey = -.1
+    big_face = u >= 3.6
+    lash = (34, 24, 22)
+    if big_face:
+        pix(-1.2, ey, _mix(tr["iris"], (0, 0, 0), .35))                             # iris (de perfil, adelante)
+        if u >= 4.4:
+            pix(-1.2 + 1 / u, ey, (236, 232, 224))                                  # blanco del ojo
+        run(-1.32, -1.2 + 1 / u, ey - 1 / u, lash)                                  # párpado / pestañas
+        if fem:
+            pix(-1.38, ey - 1.4 / u, lash)                                          # pestaña arqueada
+        pix(-1.0, ey + 1 / u, skin_sh)                                              # ojera suave
+    else:
+        pix(-1.18, ey, (40, 30, 28))
+    bcol_ = _mix(hair_sh, (40, 32, 28), .3) if sum(hair) > 360 else hair_sh
+    run(-1.45, -.78, -.58, bcol_)                                                    # ceja
+    if tr["brow"] == 2 and big_face:
+        run(-1.35, -.85, -.58 - 1 / u, bcol_)
+    if big_face:
+        pix(-1.52, .5, skin_dk)                                                     # fosa nasal
+    lip = ((176, 40, 58) if tr.get("lipstick", True) else _mix(skin, (150, 56, 64), .55)) if fem else _mix(skin, (108, 44, 44), .5)
+    run(-1.52, -1.2, .86, lip)                                                       # boca
+    if fem and big_face:
+        run(-1.5, -1.3, .86 + 1 / u, _mix(lip, (240, 140, 150), .35))               # labio inferior
+    # anteojos
+    if look.get("shades"):
+        fr_c = look.get("frame", (16, 16, 18))
+        lens = look["shades"]
+        L_ = (X > -1.66) & (X < -.74) & (Y > ey - .4) & (Y < ey + .3)
+        paint(L_, lens)
+        paint(L_ & (Y < ey - .22), _sh(lens, 1.6, 30) if sum(lens) > 60 else (70, 80, 90))   # reflejo arriba
+        if look.get("frame_full"):                                                  # marco rectangular completo
+            ring = (X > -1.74) & (X < -.66) & (Y > ey - .48) & (Y < ey + .38)
+            paint(ring & ~L_, fr_c)
+            paint(L_ & (X * .8 - Y > -1.05) & (X * .8 - Y < -.82), _sh(lens, 2.2, 40))  # reflejo en diagonal
+        elif fr_c != lens:
+            paint((X > -1.72) & (X < -.68) & (np.abs(Y - (ey - .42)) < .5 / u + .02), fr_c)  # marco superior
+        run(-.68, .38, ey - .3, fr_c)                                                # patilla hasta la oreja
+    elif tr["glasses"] is not None:
+        gc = tr["glasses"]
+        box = (X > -1.62) & (X < -.82) & (Y > ey - .36) & (Y < ey + .3)
+        inner = (X > -1.62 + 1 / u) & (X < -.82 - 1 / u) & (Y > ey - .36 + 1 / u) & (Y < ey + .3 - 1 / u)
+        paint(box & ~inner, gc)
+        paint(inner & (Y < ey - .1), _mix(skin, (220, 236, 244), .45))
+        run(-.82, .32, ey - .26, gc)
+    # gorras
+    if look.get("ballcap"):
+        c_ = look["ballcap"]
+        crown = (((X - .05) / 1.68) ** 2 + ((Y + .62) / 1.62) ** 2 < 1) & (Y < -.78)
+        paint(crown, c_)
+        paint(crown & (X * .5 + Y < -1.75), _sh(c_, 1.25, 10))
+        paint((X < -1.05) & (X > -2.55) & (Y > -1.02) & (Y < -.74), _sh(c_, .7))       # visera
+        pix(.05, -2.2, _sh(c_, .7))
+    if look.get("cap"):                                                              # gorra de policía con visera
+        c_ = look["cap"]
+        paint((X > -1.6) & (X < 1.8) & (Y > -2.45) & (Y < -1.0), c_)
+        paint((X > -1.6) & (X < 1.8) & (Y > -2.45) & (Y < -2.2), _sh(c_, 1.3, 10))
+        paint((X > -1.6) & (X < 1.8) & (Y > -1.3) & (Y < -1.0), (10, 10, 12))
+        paint((X < -1.2) & (X > -2.6) & (Y > -1.2) & (Y < -.85), (10, 10, 12))
+        if look.get("badge"):
+            paint((X > -1.0) & (X < -.4) & (Y > -2.1) & (Y < -1.5), (220, 180, 60))
+    if look.get("earpiece"):                                                         # audífono con cable en rulo
+        for k_ in range(int(2.3 * u) + 1):
+            t_ = k_ / max(1, 2.3 * u)
+            pix(.55 + .4 * t_ + .08 * np.sin(t_ * 18), .25 + 2.2 * t_, look["earpiece"])
+    patch = Image.fromarray(np.clip(out, 0, 255).astype(np.uint8), "RGBA")
+    return patch, x0, y0
+
+
+def paste_patch(im, patch, x0, y0):
+    """alpha_composite que acepta posiciones negativas (recorta el parche)."""
+    cx0, cy0 = max(0, -x0), max(0, -y0)
+    if cx0 >= patch.width or cy0 >= patch.height:
+        return
+    pc = patch.crop((cx0, cy0, patch.width, patch.height))
+    tx, ty = x0 + cx0, y0 + cy0
+    if tx >= im.width or ty >= im.height:
+        return
+    pc = pc.crop((0, 0, min(pc.width, im.width - tx), min(pc.height, im.height - ty)))
+    im.alpha_composite(pc, (tx, ty))
+
+
+
+def figure(h, frame, look, pose="walk", phase=None, amp=None, res=S):
     """Persona de perfil mirando a la izquierda; ancla abajo-centro en (w/2, h).
 
     Marcha: con `phase` (0..1) dibuja un cuadro del ciclo: muslo y pantorrilla por pierna, la que avanza
     flexiona la rodilla y levanta el pie, la de apoyo queda recta y define la altura de la cadera (sube y
     baja con el paso); los brazos se balancean opuestos a las piernas. `amp` es el ángulo de cadera.
+    `h` es el alto lógico: el raster sale a `res` x (alto h * res).
     """
+    h = int(round(h * res))
     u = h / 24
     w = int(12 * u) + 4
     pad_ = int(2 * u) + 2                                    # margen abajo para el sube y baja
@@ -1310,15 +1781,15 @@ def figure(h, frame, look, pose="walk", phase=None, amp=None):
     ankles = []
     # piernas
     fem = look.get("female")
-    lw = .75 if fem else 1.0                                            # ancho de pierna
+    lgw = .75 if fem else 1.0                                            # ancho de pierna
     for i, shade in ((1, .8), (0, 1.0)):                                # pierna de atrás primero
         col = tuple(int(c * shade) for c in pants)
         t_, k_ = legs[i]
         kx, ky = cx - th_l * np.sin(t_), hip + th_l * np.cos(t_)
         ax_, ay_ = kx - sh_l * np.sin(t_ - k_), ky + sh_l * np.cos(t_ - k_)
         ankles.append(ax_)
-        limb(d, (cx, hip), (kx, ky), 2.9 * lw * u, 2.3 * lw * u, col)          # muslo
-        limb(d, (kx, ky), (ax_, ay_), 2.2 * lw * u, 1.5 * lw * u, col)         # pantorrilla
+        limb(d, (cx, hip), (kx, ky), 2.9 * lgw * u, 2.3 * lgw * u, col)          # muslo
+        limb(d, (kx, ky), (ax_, ay_), 2.2 * lgw * u, 1.5 * lgw * u, col)         # pantorrilla
         fy_ = ay_ + .6 * u
         tilt = max(0.0, k_ - .3) * .8 * u                               # la punta baja al despegar
         if look.get("boots"):                                           # caña de la bota sobre la pantorrilla
@@ -1395,53 +1866,26 @@ def figure(h, frame, look, pose="walk", phase=None, amp=None):
     if look.get("bag"):
         d.line([(hand_x, hand_y), (hand_x, hand_y + 1.1 * u)], fill=tuple(int(c * .6) for c in look["bag"]), width=1)
         d.rectangle([hand_x - 1.0 * u, hand_y + 1.1 * u, hand_x + 1.0 * u, hand_y + 3.3 * u], fill=look["bag"])
-    # cabeza
-    hx, hy = cx - .3 * u, 2.2 * u
-    d.rectangle([cx - .7 * u, 3.4 * u, cx + .3 * u, 4.4 * u], fill=skin)                                  # cuello
-    d.ellipse([hx - 1.5 * u, hy - 1.9 * u, hx + 1.5 * u, hy + 1.7 * u], fill=skin)
-    d.chord([hx - 1.6 * u, hy - 2.1 * u, hx + 1.7 * u, hy + 1.2 * u], 160, 360, fill=hair)
-    d.rectangle([hx + .2 * u, hy - 1.4 * u, hx + 1.7 * u, hy + .6 * u], fill=hair)
-    if look.get("curly"):
-        for ox, oy in ((-1.4, -1.9), (-.4, -2.4), (.6, -2.2), (1.5, -1.5), (1.8, -.4)):
-            d.ellipse([hx + (ox - .6) * u, hy + (oy - .5) * u, hx + (ox + .6) * u, hy + (oy + .5) * u], fill=hair)
-    if look.get("ponytail"):
-        sw_ = .3 * np.sin(2 * np.pi * phase) * u
-        d.polygon([(hx + 1.0 * u, hy - 1.4 * u), (hx + 1.8 * u, hy - 1.1 * u), (hx + 2.4 * u + sw_, hy + 2.6 * u),
-                   (hx + 1.7 * u + sw_, hy + 2.8 * u)], fill=hair)
-    if look.get("bun"):
-        d.ellipse([hx + .9 * u, hy - 2.1 * u, hx + 2.3 * u, hy - .7 * u], fill=hair)
-    if look.get("ballcap"):
-        d.chord([hx - 1.6 * u, hy - 2.3 * u, hx + 1.7 * u, hy + .4 * u], 180, 360, fill=look["ballcap"])
-        d.rectangle([hx - 2.7 * u, hy - 1.05 * u, hx - .6 * u, hy - .6 * u], fill=tuple(int(c * .7) for c in look["ballcap"]))
-    if look.get("shades"):
-        d.rectangle([hx - 1.6 * u, hy - .5 * u, hx - .2 * u, hy + .2 * u], fill=look["shades"])
-        d.point((hx - 1.2 * u, hy - .35 * u), fill=(190, 214, 220))                                # reflejo en el vidrio
-        d.line([(hx - .2 * u, hy - .4 * u), (hx + 1.2 * u, hy - .5 * u)], fill=look.get("frame", (20, 20, 20)), width=1)
-    if look.get("beard"):
-        d.rectangle([hx - 1.3 * u, hy + .6 * u, hx + .4 * u, hy + 1.5 * u], fill=look["beard"])
     if look.get("skirt"):
-        sl = look.get("skirt_len", 16) * u
+        sl_ = look.get("skirt_len", 16) * u
         if look.get("pencil"):
-            d.polygon([(cx - 1.6 * u, 9.6 * u), (cx + 1.7 * u, 9.6 * u), (cx + 1.5 * u, sl), (cx - 1.4 * u, sl)], fill=look["skirt"])
+            d.polygon([(cx - 1.6 * u, 9.6 * u), (cx + 1.7 * u, 9.6 * u), (cx + 1.5 * u, sl_), (cx - 1.4 * u, sl_)], fill=look["skirt"])
+            d.line([(cx + .2 * u, 12.5 * u), (cx + .3 * u, sl_)], fill=tuple(int(c * .75) for c in look["skirt"]), width=1)  # tajo
         else:
-            d.polygon([(cx - 2 * u, 9 * u), (cx + 1.8 * u, 9 * u), (cx + 2.8 * u + stride * .2, sl), (cx - 3 * u - stride * .3, sl)],
+            d.polygon([(cx - 2 * u, 9 * u), (cx + 1.8 * u, 9 * u), (cx + 2.8 * u + stride * .2, sl_), (cx - 3 * u - stride * .3, sl_)],
                       fill=look["skirt"])
-    if look.get("long_hair"):                                          # pelo largo cayendo por la espalda
-        d.polygon([(hx - .2 * u, hy - 1.6 * u), (hx + 1.8 * u, hy - 1.2 * u), (hx + 2.2 * u, hy + 3.6 * u),
-                   (hx + .4 * u, hy + 3.2 * u)], fill=hair)
-        d.chord([hx - 1.7 * u, hy - 2.2 * u, hx + 1.8 * u, hy + 1.0 * u], 150, 360, fill=hair)
-    if look.get("cap"):                                                # gorra de policía con visera
-        d.rectangle([hx - 1.6 * u, hy - 2.4 * u, hx + 1.8 * u, hy - 1.0 * u], fill=look["cap"])
-        d.rectangle([hx - 1.6 * u, hy - 1.3 * u, hx + 1.8 * u, hy - 1.0 * u], fill=(10, 10, 12))
-        d.rectangle([hx - 2.6 * u, hy - 1.2 * u, hx - 1.2 * u, hy - .8 * u], fill=(10, 10, 12))
-        if look.get("badge"):
-            d.rectangle([hx - 1.0 * u, hy - 2.1 * u, hx - .4 * u, hy - 1.5 * u], fill=(220, 180, 60))
     if look.get("badge"):
         d.rectangle([cx - 1.3 * u, 6 * u, cx - .6 * u, 6.8 * u], fill=look["badge"])
     if look.get("belt"):
         d.rectangle([cx - 2.1 * u, 11.6 * u, cx + 1.9 * u, 12.3 * u], fill=look["belt"])
-    if look.get("earpiece"):
-        d.line([(hx + .6 * u, hy), (hx + 1.0 * u, hy + 2.4 * u)], fill=look["earpiece"], width=1)
+        d.rectangle([cx - 2.1 * u, 11.6 * u, cx - 1.4 * u, 12.3 * u], fill=(200, 176, 110))   # hebilla
+    # cabeza: cuello y cara de perfil (ojo, ceja, nariz, boca, oreja, peinado)
+    hx, hy = cx - .3 * u, 2.2 * u
+    d.rectangle([cx - .7 * u, 3.4 * u, cx + .3 * u, 4.4 * u], fill=skin)                                  # cuello
+    if look.get("turtleneck"):
+        d.rectangle([cx - 1.0 * u, 3.8 * u, cx + .5 * u, 4.6 * u], fill=look["turtleneck"])
+    patch, px0, py0 = head_patch(u, look, hx, hy, phase=phase)
+    paste_patch(im, patch, px0, py0)
     out_ = Image.new("RGBA", (w, h + 1), (0, 0, 0, 0))
     out_.paste(im.crop((0, 0, w, h + 1)), (0, int(round(drop))))
     return out_
@@ -1462,7 +1906,8 @@ def arm_pose(d, sx, u, alpha, col, skin, width, short_sleeves=False):
     else:
         limb(d, (sx, 5 * u), (ex, ey), width * 1.25, width * 1.05, col)       # brazo
         limb(d, (ex, ey), (hx_, hy_), width * 1.0, width * .85, col)          # antebrazo
-    d.rectangle([hx_ - .45 * u, hy_ - .3 * u, hx_ + .45 * u, hy_ + .6 * u], fill=skin)  # mano (bloque chico, no '+')
+    d.ellipse([hx_ - .5 * u, hy_ - .35 * u, hx_ + .45 * u, hy_ + .7 * u], fill=skin)    # mano
+    d.line([(hx_ - .45 * u, hy_ + .1 * u), (hx_ - .5 * u, hy_ + .45 * u)], fill=tuple(int(c * .8) for c in skin[:3]), width=1)  # pulgar
     return hx_, hy_
 
 
@@ -1561,18 +2006,18 @@ def walk_frames(fn, A):
 
 def sprite_group(frames, ox, oy, step=.5, freeze_img=None, flip=False, delay=None):
     """frames: cuadros de marcha (2 heredados o GAIT_N); freeze_img: cuadro durante el congelado."""
-    fx = f' transform="translate({2 * ox + frames[0].width} 0) scale(-1 1)"' if flip else ""
+    fx = f' transform="translate({fnum(2 * ox + lw(frames[0]))} 0) scale(-1 1)"' if flip else ""
     if len(frames) == 2:
         a, b = frames
-        walk = (f'<g style="animation:fa {step}s infinite steps(1)">{image(a, ox, oy, up=1)}</g>'
-                f'<g style="animation:fb {step}s infinite steps(1)">{image(b, ox, oy, up=1)}</g>')
+        walk = (f'<g style="animation:fa {step}s infinite steps(1)">{image(a, ox, oy)}</g>'
+                f'<g style="animation:fb {step}s infinite steps(1)">{image(b, ox, oy)}</g>')
     else:
         dl = -random.Random(len(css)).uniform(0, step) if delay is None else delay
         walk = "".join(f'<g opacity="{1 if i == 0 else 0}" style="animation:wk{i} {step:.3f}s {dl:.3f}s infinite steps(1)">'
-                       f'{image(f, ox, oy, up=1)}</g>' for i, f in enumerate(frames))
+                       f'{image(f, ox, oy)}</g>' for i, f in enumerate(frames))
     s = f'<g style="{WALK_VIS}">{walk}</g>'
     if freeze_img is not None:
-        s += f'<g opacity="0" style="{FRZ_VIS}">{image(freeze_img, ox, oy, up=1)}</g>'
+        s += f'<g opacity="0" style="{FRZ_VIS}">{image(freeze_img, ox, oy)}</g>'
     return f'<g{fx}>{s}</g>'
 
 
@@ -1671,8 +2116,8 @@ for i in range(17):
                   f"{VPY + F * HC / z:.2f}px) scale({z_a / z:.4f})}}")
 frames.append(f"100%{{opacity:0;transform:translate({VPX:.1f}px,{VPY}px) scale(.02)}}")
 css.append(f"@keyframes {kb}{{{''.join(frames)}}}")
-turn_svg = (f'<g style="animation:{ka} {T}s infinite linear">{image(side, -side.width // 2, -side.height, up=1)}</g>'
-            f'<g style="animation:{kb} {T}s infinite linear">{image(rear, -rear.width // 2, -rear.height, up=1)}</g>')
+turn_svg = (f'<g style="animation:{ka} {T}s infinite linear">{image(side, -lw(side) / 2, -lh(side))}</g>'
+            f'<g style="animation:{kb} {T}s infinite linear">{image(rear, -lw(rear) / 2, -lh(rear))}</g>')
 # va solo en la copia del tile que está en pantalla durante el giro (sin vuelta del tile en esa ventana)
 assert int(tile_g(T_IN) // TW) == int(tile_g(T_GONE) // TW), "el tile da la vuelta durante el giro del taxi"
 copy_off = round((scr_turn - (tile_g(T_TURN) % TW) - x_turn) / TW) * TW
@@ -1699,7 +2144,7 @@ for i in range(10):
     def pose(q):
         z = ZN + (q if away else ZR - q)
         s_ = PH_Z0 * Z0 / z / PREF
-        x = VPX + F * X / z - fr[0].width * s_ / 2
+        x = VPX + F * X / z - lw(fr[0]) * s_ / 2
         y = VPY + F * HC / z - PREF * s_
         th = 1 - np.exp(-(z - Z0) / 1100)
         op = max(0.0, min(1.0, q / FADE, (ZR - q) / FADE)) * max(0.0, 1 - th * 1.1)
@@ -1777,7 +2222,7 @@ css.append(f"@keyframes {kt_}{{{''.join(kf_t)}}}")
 # va en las dos copias del tramo: siempre está cerca de la esquina, así la otra copia queda fuera de cuadro
 # y la vuelta del tramo no lo hace saltar
 turner_one = (f'<g style="transform-origin:0 0;animation:{kt_} {T}s infinite linear">'
-              f'{sprite_group(fr_t, -fr_t[0].width / 2, -FAR_H, step=cyc_t, freeze_img=frozen(fr_t[0]), flip=True)}</g>')
+              f'{sprite_group(fr_t, -lw(fr_t[0]) / 2, -FAR_H, step=cyc_t, freeze_img=frozen(fr_t[0]), flip=True)}</g>')
 turner = "".join(f'<g transform="translate({off} 0)">{turner_one}</g>' for off in (0, -TW))
 body.append(f'<g style="{track(TILE0, NEAR_SPEED, TW, 0, 0)}">{turner}</g>')
 
@@ -1821,8 +2266,8 @@ for ly, dirn, k, vehs in LANES:
         if dirn > 0:
             im = im.transpose(Image.FLIP_LEFT_RIGHT)
         x0 = j * gaps + phase
-        spr = (f'<g style="{WALK_VIS}">{image(im, 0, -im.height + 2, up=1)}</g>'
-               f'<g opacity="0" style="{FRZ_VIS}">{image(frozen(im), 0, -im.height + 2, up=1)}</g>')
+        spr = (f'<g style="{WALK_VIS}">{image(im, 0, -lh(im) + 2)}</g>'
+               f'<g opacity="0" style="{FRZ_VIS}">{image(frozen(im), 0, -lh(im) + 2)}</g>')
         body.append(f'<g style="{track(x0, v, CSPAN, CMARG, ly)}">{spr}</g>')
 
 # ============================================================ escena de infracción junto a nuestro cordón
@@ -1830,8 +2275,9 @@ for ly, dirn, k, vehs in LANES:
 # izquierda a derecha: el patrullero con la sirena, el oficial y un auto estacionado frente a un cartel de
 # prohibido estacionar. El oficial, a escala de los autos (~1.75 m contra ~1.45 m), apoya un pie en el
 # paragolpe trasero del infractor y escribe la multa. La escena cruza la costura del tile (x > W).
-def officer_writing(h, k):
+def officer_writing(h, k, res=S):
     """Policía mirando a la derecha, pie sobre un paragolpe, escribiendo en la libreta (cuadro k de 4)."""
+    h = int(round(h * res))
     u = h / 24
     w = int(12 * u) + 6
     im = Image.new("RGBA", (w, h + 1), (0, 0, 0, 0)); d = ImageDraw.Draw(im)
@@ -1861,27 +2307,24 @@ def officer_writing(h, k):
     d.line([(cx + .6 * u, 5.0 * u), (cx + 1.6 * u, 8.0 * u), (hx_, hy_ + .4 * u)], fill=navy, width=max(2, int(1.3 * u)))
     d.ellipse([hx_ - .5 * u, hy_, hx_ + .5 * u, hy_ + .9 * u], fill=skin)
     d.line([(hx_, hy_), (hx_ + .5 * u, hy_ - .9 * u)], fill=(30, 30, 40), width=1)                     # birome
-    # cabeza mirando la libreta
+    # cabeza mirando la libreta (de perfil hacia la derecha, gorra con visera)
     hx, hy = cx + .7 * u, 2.5 * u
     d.rectangle([cx - .1 * u, 3.5 * u, cx + .9 * u, 4.7 * u], fill=skin)
-    d.ellipse([hx - 1.5 * u, hy - 1.8 * u, hx + 1.5 * u, hy + 1.7 * u], fill=skin)
-    d.rectangle([hx - 1.7 * u, hy - 2.4 * u, hx + 1.6 * u, hy - 1.0 * u], fill=(26, 34, 64))
-    d.rectangle([hx - 1.7 * u, hy - 1.3 * u, hx + 1.6 * u, hy - 1.0 * u], fill=(10, 10, 12))
-    d.rectangle([hx + 1.2 * u, hy - 1.1 * u, hx + 2.6 * u, hy - .7 * u], fill=(10, 10, 12))            # visera
-    d.rectangle([hx + .4 * u, hy - 2.1 * u, hx + 1.0 * u, hy - 1.5 * u], fill=(220, 180, 60))
-    d.rectangle([hx - 1.4 * u, hy - 1.0 * u, hx - .4 * u, hy + .4 * u], fill=(40, 30, 24))
-    d.point((hx + .9 * u, hy + .2 * u), fill=(30, 24, 20))                                             # mirada baja
+    look_o = dict(skin=skin, hair=(40, 30, 24), cap=(26, 34, 64), badge=True, hair_style="short")
+    tr_o = dict(face_traits(look_o), glasses=None, mustache=True)
+    patch, px0, py0 = head_patch(u, look_o, hx, hy, facing=-1, traits=tr_o)
+    paste_patch(im, patch, px0, py0)
     return im
 
 
-def no_parking_sign(h):
+def no_parking_sign(h, res=S):
     """Cartel argentino de prohibido estacionar: círculo rojo con la E tachada, sobre un poste."""
-    S = 4
+    K = 4 * res
     w = int(h * .32)
-    big = Image.new("RGBA", (w * S, (h + 1) * S), (0, 0, 0, 0)); d = ImageDraw.Draw(big)
-    cxs, r = w * S / 2, w * S * .46
-    d.rectangle([cxs - S * .6, r * 1.6, cxs + S * .6, (h + 1) * S], fill=(70, 76, 74))                  # poste
-    cy_ = r + S
+    big = Image.new("RGBA", (w * K, (h + 1) * K), (0, 0, 0, 0)); d = ImageDraw.Draw(big)
+    cxs, r = w * K / 2, w * K * .46
+    d.rectangle([cxs - K * .6, r * 1.6, cxs + K * .6, (h + 1) * K], fill=(70, 76, 74))                  # poste
+    cy_ = r + K
     d.ellipse([cxs - r, cy_ - r, cxs + r, cy_ + r], fill=(206, 30, 40))
     d.ellipse([cxs - r * .76, cy_ - r * .76, cxs + r * .76, cy_ + r * .76], fill=(244, 244, 238))
     ex, ey, eh = cxs - r * .28, cy_ - r * .42, r * .84                                                   # la E
@@ -1889,7 +2332,8 @@ def no_parking_sign(h):
     for yy_e in (0, .43, .86):
         d.rectangle([ex, ey + eh * yy_e - r * .02, ex + r * .5, ey + eh * yy_e + r * .12], fill=(20, 20, 20))
     d.line([(cxs - r * .54, cy_ - r * .54), (cxs + r * .54, cy_ + r * .54)], fill=(206, 30, 40), width=int(r * .2))
-    return _finish(big, w, h + 1)
+    d.ellipse([cxs - r * .9, cy_ - r * .9, cxs - r * .3, cy_ - r * .3], outline=(236, 90, 96), width=max(1, K // 3))  # brillo del borde
+    return _finish(big, w * res, (h + 1) * res)
 
 
 PCL, VCL = 80, 76                                        # largo del patrullero y del infractor
@@ -1899,18 +2343,18 @@ pcar = vehicle_side(PCL, (26, 28, 32), "police").transpose(Image.FLIP_LEFT_RIGHT
 car_h = PCL * .31
 OH = round(car_h * 1.75 / 1.45)                          # alto del oficial a escala del auto
 ofr = [officer_writing(OH, k) for k in range(4)]
-p_y = PBASE - pcar.height + 2
+p_y = PBASE - lh(pcar) + 2
 o_x = PCX + PCL + 1                                      # entre el frente del patrullero y el infractor
 o_y = PBASE - OH
-foot_x = o_x + int(ofr[0].width * .38 + 4.6 * OH / 24 + 1.6 * OH / 24)
+foot_x = o_x + int(lw(ofr[0]) * .38 + 4.6 * OH / 24 + 1.6 * OH / 24)
 VCX = foot_x - 1                                         # paragolpe trasero del infractor bajo su pie
 vcar = vehicle_side(VCL, (122, 34, 40), "sedan").transpose(Image.FLIP_LEFT_RIGHT)
-v_y = PBASE - vcar.height + 2
+v_y = PBASE - lh(vcar) + 2
 sign = no_parking_sign(40)
-SX, SY = VCX + VCL - 16, GROUND + 4 - sign.height        # en la vereda, junto al cordón, frente al infractor
-_hh = PCL * .31 * VS
+SX, SY = VCX + VCL - 16, GROUND + 4 - lh(sign)       # en la vereda, junto al cordón, frente al infractor
+_hh = PCL * .31 * VS * S
 _tp = int(_hh * .14)
-bar_y0, bar_y1 = p_y + (_tp - _hh * .1) / VS, p_y + (_tp + _hh * .03) / VS
+bar_y0, bar_y1 = p_y + (_tp - _hh * .1) / (VS * S), p_y + (_tp + _hh * .03) / (VS * S)
 bar_xb, bar_xm, bar_xr = PCX + PCL * (1 - .63), PCX + PCL * (1 - .55), PCX + PCL * (1 - .47)
 defs.append('<radialGradient id="sirR"><stop offset="0" stop-color="#ff3040" stop-opacity=".75"/>'
             '<stop offset="1" stop-color="#ff3040" stop-opacity="0"/></radialGradient>'
@@ -1930,18 +2374,18 @@ siren = (f'<g style="animation:sirB .9s infinite steps(1)">'
          f'<ellipse cx="{(bar_xm + bar_xr) / 2:.1f}" cy="{bar_y0 + bh_ / 2:.1f}" rx="15" ry="9" fill="url(#sirR)"/>'
          f'<rect x="{bar_xm:.1f}" y="{bar_y0:.1f}" width="{bar_xr - bar_xm:.1f}" height="{bh_:.1f}" fill="#ffd0d4"/></g>')
 writing = "".join(f'<g opacity="{1 if k == 0 else 0}" style="animation:wr{k} 1.6s infinite steps(1)">'
-                  f'{image(ofr[k], o_x, o_y, up=1)}</g>' for k in range(4))
-scene = (f'<g style="{WALK_VIS}">{image(pcar, PCX, p_y, up=1)}{image(vcar, VCX, v_y, up=1)}{writing}{siren}'
-         f'{image(sign, SX, SY, up=1)}</g>'
-         f'<g opacity="0" style="{FRZ_VIS}">{image(frozen(pcar), PCX, p_y, up=1)}{image(frozen(vcar), VCX, v_y, up=1)}'
-         f'{image(frozen(ofr[0]), o_x, o_y, up=1)}{image(frozen(sign), SX, SY, up=1)}</g>')
+                  f'{image(ofr[k], o_x, o_y)}</g>' for k in range(4))
+scene = (f'<g style="{WALK_VIS}">{image(pcar, PCX, p_y)}{image(vcar, VCX, v_y)}{writing}{siren}'
+         f'{image(sign, SX, SY)}</g>'
+         f'<g opacity="0" style="{FRZ_VIS}">{image(frozen(pcar), PCX, p_y)}{image(frozen(vcar), VCX, v_y)}'
+         f'{image(frozen(ofr[0]), o_x, o_y)}{image(frozen(sign), SX, SY)}</g>')
 patrol = "".join(f'<g transform="translate({off} 0)">{scene}</g>' for off in (0, -TW))
 body.append(f'<g style="{track(TILE0, NEAR_SPEED, TW, 0, 0)}">{patrol}</g>')
 
 # ============================================================ contenedor de basura desbordado (cuadra larga)
-def dumpster(length):
+def dumpster(length, res=S):
     """Contenedor de carga frontal (de los que levanta el camión), con la tapa abierta y desbordado de bolsas."""
-    S_ = 4
+    S_ = 4 * res
     L_ = length * S_
     Hb_ = length * .55 * S_                                  # caja (~1.1 m de alto para ~1.9 m de largo)
     pad = int(Hb_ * .7)                                      # lugar para la montaña de bolsas
@@ -1977,34 +2421,74 @@ def dumpster(length):
     for bx_, sc_ in ((ox + L_ + 5 * S_, 1.0), (ox - 2 * S_, .8)):                                            # bolsas en el piso
         d_.ellipse([bx_ - 3.4 * S_ * sc_, oy + Hb_ - 6 * S_ * sc_, bx_ + 3.4 * S_ * sc_, oy + Hb_ + .6 * S_], fill=(26, 28, 32))
         d_.line([(bx_ - S_, oy + Hb_ - 4.6 * S_ * sc_), (bx_ + .6 * S_, oy + Hb_ - 5 * S_ * sc_)], fill=(90, 94, 100), width=S_)
-    return _finish(im_, int(im_.width / S_), int(im_.height / S_))
+    return _finish(im_, int(im_.width / 4), int(im_.height / 4))
 
 
 dump = dumpster(38)
 DX = 506                                                 # en la cuadra larga, contra el cordón
-DY = GROUND + 2 - dump.height
-dump_svg = (f'<g style="{WALK_VIS}">{image(dump, DX, DY, up=1)}</g>'
-            f'<g opacity="0" style="{FRZ_VIS}">{image(frozen(dump), DX, DY, up=1)}</g>')
+DY = GROUND + 2 - lh(dump)
+dump_svg = (f'<g style="{WALK_VIS}">{image(dump, DX, DY)}</g>'
+            f'<g opacity="0" style="{FRZ_VIS}">{image(frozen(dump), DX, DY)}</g>')
 dump_svg = "".join(f'<g transform="translate({off} 0)">{dump_svg}</g>' for off in (0, -TW))
 body.append(f'<g style="{track(TILE0, NEAR_SPEED, TW, 0, 0)}">{dump_svg}</g>')
 
 # ============================================================ árboles de nuestra vereda (capa propia)
 OUR_TREE_H = 112                                             # ~5 m junto al cordón (la copa sale del cuadro)
-def tree_pit(cx_p, base_y):
-    """Cantero de tierra con rejita de hierro, en la misma capa que el árbol (no se despega del tronco)."""
-    g_ = (f'<polygon points="{cx_p - 8},{base_y - 2} {cx_p + 8},{base_y - 2} {cx_p + 9.5},{base_y + 3} {cx_p - 9.5},{base_y + 3}" '
-          f'fill="#423629"/>'
-          f'<polygon points="{cx_p - 6.5},{base_y - 1} {cx_p + 6.5},{base_y - 1} {cx_p + 7.5},{base_y + 2} {cx_p - 7.5},{base_y + 2}" '
-          f'fill="#56473a"/>')
-    for k_ in range(-6, 7, 3):                                 # terrones / hojas secas
-        g_ += f'<rect x="{cx_p + k_}" y="{base_y}" width="1" height="1" fill="#6a5a46"/>'
-    g_ += (f'<polyline points="{cx_p - 9.5},{base_y + 3} {cx_p - 8},{base_y - 2} {cx_p + 8},{base_y - 2} {cx_p + 9.5},{base_y + 3}" '
-           f'fill="none" stroke="#1e1e20" stroke-width=".8"/>'
-           f'<line x1="{cx_p - 9.5}" y1="{base_y + 3}" x2="{cx_p + 9.5}" y2="{base_y + 3}" stroke="#2c2c2e" stroke-width=".8"/>')
-    for k_ in (-8, -4, 0, 4, 8):                               # barrotes de la rejita
-        g_ += f'<line x1="{cx_p + k_ * 1.08}" y1="{base_y - 4}" x2="{cx_p + k_ * 1.15}" y2="{base_y + 3}" stroke="#1e1e20" stroke-width=".6"/>'
-    g_ += f'<line x1="{cx_p - 8.7}" y1="{base_y - 4}" x2="{cx_p + 8.7}" y2="{base_y - 4}" stroke="#1e1e20" stroke-width=".7"/>'
-    return g_
+# Cantero pegado al cordón: ocupa solo la franja de vereda que sigue al cordón (y 99..101.6). Los carriles de
+# gente van por delante (LANE_FAR >= 103), así nadie lo pisa ni pasa "a través" del tronco.
+PIT_FAR, PIT_NEAR = GROUND + 3.0, GROUND + 5.6               # borde de atrás (contra el cordón) y de adelante
+PIT_HW_F, PIT_HW_N = 8.4, 9.6                                # semianchos (un poco de perspectiva)
+PIT_RAIL = 3.2                                               # alto de la vallita (~20 cm)
+PIT_BOX = (-12, PIT_FAR - 5, 12, PIT_NEAR + 1)               # lienzo del sprite, relativo al centro del cantero
+
+
+def tree_pit_sprites(seed, res=S):
+    """Cantero con borde de cemento, tierra con terrones, hojas secas y yuyitos, y una vallita baja de hierro.
+    Devuelve (atrás, adelante): atrás va antes del tronco (tierra, laterales); adelante, después (el frente
+    de la vallita tapa la base del tronco)."""
+    K = 4 * res
+    x0, y0, x1, y1 = PIT_BOX
+    Wc, Hc = int((x1 - x0) * K), int((y1 - y0) * K)
+    P = lambda x, y: ((x - x0) * K, (y - y0) * K)
+    rp = random.Random(seed)
+    back = Image.new("RGBA", (Wc, Hc), (0, 0, 0, 0)); db = ImageDraw.Draw(back)
+    front = Image.new("RGBA", (Wc, Hc), (0, 0, 0, 0)); dfr = ImageDraw.Draw(front)
+    trap = lambda hf, hn, yf, yn: [P(-hf, yf), P(hf, yf), P(hn, yn), P(-hn, yn)]
+    db.polygon(trap(PIT_HW_F, PIT_HW_N, PIT_FAR, PIT_NEAR), fill=(150, 150, 142))                  # borde de cemento
+    db.polygon(trap(PIT_HW_F, PIT_HW_N, PIT_FAR, PIT_FAR + .25), fill=(190, 190, 182))             # canto iluminado
+    db.polygon(trap(PIT_HW_F - .6, PIT_HW_N - .7, PIT_FAR + .35, PIT_NEAR - .4), fill=(68, 54, 42))  # tierra
+    db.polygon(trap(PIT_HW_F - .6, PIT_HW_N - .7, PIT_FAR + .35, PIT_FAR + .8), fill=(46, 36, 30))   # sombra del borde
+    for _ in range(46):                                                                            # terrones y hojas
+        t_ = rp.uniform(.15, .95)
+        y_ = PIT_FAR + .4 + t_ * (PIT_NEAR - PIT_FAR - .9)
+        hw_ = (PIT_HW_F - .8) + (PIT_HW_N - PIT_HW_F) * t_
+        x_ = rp.uniform(-hw_, hw_)
+        kind_ = rp.random()
+        col = ((92, 74, 54) if kind_ < .5 else (40, 32, 26) if kind_ < .75 else
+               rp.choice([(170, 128, 56), (138, 96, 44), (186, 150, 70)]))
+        r_ = rp.uniform(.18, .34)
+        db.ellipse([*P(x_ - r_, y_ - r_ * .5), *P(x_ + r_, y_ + r_ * .5)], fill=col)
+    for wx_ in (rp.uniform(-6, -3), rp.uniform(3, 6.5)):                                           # yuyitos
+        for k_ in range(3):
+            db.line([P(wx_ + k_ * .25 - .25, PIT_NEAR - .7), P(wx_ + k_ * .45 - .45, PIT_NEAR - 1.6 - .2 * (k_ % 2))],
+                    fill=(84, 124, 56), width=max(1, K // 3))
+    iron, iron_hi = (26, 28, 30), (92, 96, 100)
+    lw_ = max(1, int(K * .45))
+    for sg in (-1, 1):                                                                             # laterales y postes de atrás
+        db.line([P(sg * PIT_HW_F, PIT_FAR - PIT_RAIL * .92), P(sg * PIT_HW_N, PIT_NEAR - PIT_RAIL)], fill=iron, width=lw_)
+        db.line([P(sg * PIT_HW_F, PIT_FAR - 1.0), P(sg * PIT_HW_N, PIT_NEAR - 1.1)], fill=iron, width=max(1, lw_ - 1))
+        db.line([P(sg * PIT_HW_F, PIT_FAR), P(sg * PIT_HW_F, PIT_FAR - PIT_RAIL * .92 - .2)], fill=iron, width=lw_)
+    for xs_ in (-PIT_HW_N, -PIT_HW_N / 3, PIT_HW_N / 3, PIT_HW_N):                                 # frente: postes
+        dfr.line([P(xs_, PIT_NEAR), P(xs_, PIT_NEAR - PIT_RAIL - .25)], fill=iron, width=lw_ + 1)
+        dfr.line([P(xs_ - .15, PIT_NEAR - .2), P(xs_ - .15, PIT_NEAR - PIT_RAIL)], fill=iron_hi, width=max(1, K // 4))
+    for yr_, w_ in ((PIT_NEAR - PIT_RAIL, lw_ + 1), (PIT_NEAR - 1.1, lw_)):                        # barandas del frente
+        dfr.line([P(-PIT_HW_N, yr_), P(PIT_HW_N, yr_)], fill=iron, width=w_)
+    dfr.line([P(-PIT_HW_N, PIT_NEAR - PIT_RAIL - .18), P(PIT_HW_N, PIT_NEAR - PIT_RAIL - .18)], fill=iron_hi, width=max(1, K // 4))
+    for k_ in range(9):                                                                            # aros entre postes
+        xa_ = -PIT_HW_N + (k_ + .5) * (2 * PIT_HW_N / 9)
+        dfr.arc([*P(xa_ - .75, PIT_NEAR - PIT_RAIL + .1), *P(xa_ + .75, PIT_NEAR - .9)], 180, 360, fill=iron, width=max(1, K // 3))
+    fin = lambda im_: _finish(im_, int(Wc / 4), int(Hc / 4))
+    return fin(back), fin(front)
 
 
 css.append("@keyframes sway{0%,100%{transform:rotate(-.9deg)}50%{transform:rotate(1.1deg)}}"
@@ -2013,31 +2497,32 @@ css.append("@keyframes sway{0%,100%{transform:rotate(-.9deg)}50%{transform:rotat
 trees_svg = ""
 for i_, tx_ in enumerate(OUR_TREES):
     trunk_i, (cb_i, cf_i), fl1, fl2, (px_c, py_c) = street_tree(OUR_TREE_H, 90 + i_, parts=True)
-    x0_t, y0_t = tx_ - trunk_i.width / 2, GROUND + 5 - trunk_i.height
-    ox_, oy_ = x0_t + px_c, y0_t + py_c                     # pivote: donde el tronco se abre en ramas
+    pit_b, pit_f = tree_pit_sprites(300 + i_)
+    x0_t, y0_t = tx_ - lw(trunk_i) / 2, (PIT_FAR + PIT_NEAR) / 2 + .4 - lh(trunk_i)   # el tronco nace en el medio del cantero
+    ox_, oy_ = x0_t + px_c / S, y0_t + py_c / S             # pivote: donde el tronco se abre en ramas
     sw_d, sw_dl = 4.2 + i_ * .7, -i_ * 1.3
     swing = f'transform-origin:{ox_:.1f}px {oy_:.1f}px;animation:sway {sw_d:.1f}s {sw_dl:.1f}s infinite ease-in-out'
-    trees_svg += (f'<g style="{swing}">{image(cb_i, x0_t, y0_t, up=1)}</g>' + tree_pit(tx_, GROUND + 4)
-                  + image(trunk_i, x0_t, y0_t, up=1) +
+    trees_svg += (f'<g style="{swing}">{image(cb_i, x0_t, y0_t)}</g>' + image(pit_b, tx_ + PIT_BOX[0], PIT_BOX[1])
+                  + image(trunk_i, x0_t, y0_t) + image(pit_f, tx_ + PIT_BOX[0], PIT_BOX[1]) +
                   f'<g style="{swing}"><g style="animation:rustle {1.7 + i_ * .3:.1f}s infinite ease-in-out">'
-                  f'{image(cf_i, x0_t, y0_t, up=1)}'
-                  f'<g style="animation:flA {1.1 + i_ * .2:.1f}s infinite steps(1)">{image(fl1, x0_t, y0_t, up=1)}</g>'
-                  f'<g style="animation:flB {1.1 + i_ * .2:.1f}s infinite steps(1)">{image(fl2, x0_t, y0_t, up=1)}</g>'
+                  f'{image(cf_i, x0_t, y0_t)}'
+                  f'<g style="animation:flA {1.1 + i_ * .2:.1f}s infinite steps(1)">{image(fl1, x0_t, y0_t)}</g>'
+                  f'<g style="animation:flB {1.1 + i_ * .2:.1f}s infinite steps(1)">{image(fl2, x0_t, y0_t)}</g>'
                   f'</g></g>')
 trees_svg = "".join(f'<g transform="translate({off} 0)">{trees_svg}</g>' for off in (0, -TW, TW))
 body.append(f'<g style="{track(TILE0, NEAR_SPEED, TW, 0, 0)}">{trees_svg}</g>')
 
 # ============================================================ hidrante (capa propia)
 # Por delante de los autos y sus sombras, por detrás de la gente de la vereda (pies más abajo).
-hyd_svg = (f'<g style="{WALK_VIS}">{image(hyd, HX, HB - 14, up=1)}</g>'
-           f'<g opacity="0" style="{FRZ_VIS}">{image(frozen(hyd), HX, HB - 14, up=1)}</g>')
+hyd_svg = (f'<g style="{WALK_VIS}">{image(hyd, HX, HB - lh(hyd))}</g>'
+           f'<g opacity="0" style="{FRZ_VIS}">{image(frozen(hyd), HX, HB - lh(hyd))}</g>')
 hyd_svg = "".join(f'<g transform="translate({off} 0)">{hyd_svg}</g>' for off in (0, -TW))
 body.append(f'<g style="{track(TILE0, NEAR_SPEED, TW, 0, 0)}">{hyd_svg}</g>')
 
 # ============================================================ alguien paseando un perro (una sola vez)
-def dog(h, phase):
+def dog(h, phase, res=S):
     """Perro tipo beagle de perfil, mirando a la izquierda, trotando (patas en diagonal)."""
-    S4 = 4
+    S4 = 4 * res
     L_ = int(h * 1.5) * S4
     im = Image.new("RGBA", (L_, int(h * 1.25) * S4), (0, 0, 0, 0)); d = ImageDraw.Draw(im)
     Hs_ = h * S4
@@ -2049,7 +2534,7 @@ def dog(h, phase):
         sw = np.sin(2 * np.pi * ph_) * .16 * Hs_
         lift = max(0.0, np.cos(2 * np.pi * ph_)) * .08 * Hs_
         col = white if sh == 1.0 else (196, 190, 178)
-        limb(d, (lx * Hs_, by_ + .1 * Hs_), (lx * Hs_ - sw, im.height - 1 - lift), .1 * Hs_, .08 * Hs_, col)
+        limb(d, (lx * Hs_, by_ + .1 * Hs_), (lx * Hs_ - sw, im.height - 1 - lift), .14 * Hs_, .11 * Hs_, col)
     d.ellipse([bx0, by_ - .2 * Hs_, bx1, by_ + .25 * Hs_], fill=tan)                 # cuerpo
     d.ellipse([.55 * Hs_, by_ - .2 * Hs_, 1.0 * Hs_, by_ + .02 * Hs_], fill=black)    # montura negra
     d.ellipse([bx0 + .05 * Hs_, by_ + .02 * Hs_, .75 * Hs_, by_ + .25 * Hs_], fill=white)   # pecho y panza
@@ -2064,7 +2549,7 @@ def dog(h, phase):
     d.ellipse([hx_ - .02 * Hs_, hy_ - .12 * Hs_, hx_ + .12 * Hs_, hy_ + .14 * Hs_], fill=(120, 76, 40))   # oreja caída
     d.ellipse([hx_ - .12 * Hs_, hy_ - .07 * Hs_, hx_ - .07 * Hs_, hy_ - .02 * Hs_], fill=black)   # ojo
     d.rectangle([hx_ + .06 * Hs_, hy_ + .1 * Hs_, hx_ + .14 * Hs_, hy_ + .18 * Hs_], fill=(200, 40, 40))  # collar
-    return _finish(im, int(L_ / S4), int(im.height / S4))
+    return _finish(im, int(L_ / 4), int(im.height / 4))
 
 
 DW_Y = LANE_FAR                                              # carril de enfrente: va hacia la derecha
@@ -2081,8 +2566,8 @@ dog_frames = [dog(DOG_H, i / GAIT_N) for i in range(GAIT_N)]
 cyc_dog = .42                                                # trote corto y rápido
 walker = sprite_group(dw_frames, 0, -DW_H, step=cyc_dw, flip=True)
 pup = sprite_group(dog_frames, 0, 0, step=cyc_dog, flip=True)
-hand_x, hand_y = dw_frames[0].width * .7, -DW_H * .52        # mano que lleva la correa (mirando a la derecha)
-dog_x = dw_frames[0].width + 10
+hand_x, hand_y = lw(dw_frames[0]) * .7, -DW_H * .52        # mano que lleva la correa (mirando a la derecha)
+dog_x = lw(dw_frames[0]) + 10
 leash = (f'<path d="M{hand_x:.1f} {hand_y:.1f} Q{(hand_x + dog_x) / 2:.1f} {-DOG_H * .4:.1f} '
          f'{dog_x + 2:.1f} {-DOG_H * .75:.1f}" stroke="#2a2420" stroke-width=".7" fill="none"/>')
 kdw = nid("dw")
@@ -2090,7 +2575,7 @@ css.append(f"@keyframes {kdw}{{0%,{pct(DW_T0):.3f}%{{transform:translate(-60px,{
            f"{pct(DW_T1):.3f}%,100%{{transform:translate({W + 60:.0f}px,{DW_Y}px)}}}}")
 dog_walker = (f'<g style="transform:translate(-60px,{DW_Y}px);animation:{kdw} {T}s infinite linear">'
               f'<g style="{WALK_VIS}">{leash}</g>{walker}'
-              f'<g transform="translate({dog_x} {-dog_frames[0].height + 1})">{pup}</g></g>')
+              f'<g transform="translate({fnum(dog_x)} {fnum(-lh(dog_frames[0]) + 1)})">{pup}</g></g>')
 
 # ============================================================ multitud: dos carriles de vereda
 # Carril de enfrente: gente que va hacia la derecha (~1 m/s). Carril cercano (el nuestro): gente que va
@@ -2125,8 +2610,9 @@ crowd_back = [g_ for _, g_ in sorted(crowd_back, key=lambda c: c[0])]   # el car
 body.extend(crowd_back)
 
 # ============================================================ la mujer del vestido rojo (y el agente)
-def woman_in_red(h, frame, phase=None, amp=.4):
+def woman_in_red(h, frame, phase=None, amp=.4, res=S):
     """Silueta de reloj de arena: vestido rojo ajustado a la rodilla, pelo rubio largo, tacos."""
+    h = int(round(h * res))
     u = h / 24
     w = int(12 * u) + 6
     im = Image.new("RGBA", (w, h + 1), (0, 0, 0, 0)); d = ImageDraw.Draw(im)
@@ -2160,6 +2646,8 @@ def woman_in_red(h, frame, phase=None, amp=.4):
     flow = .35 * np.sin(2 * np.pi * phase + 1) * u
     d.polygon([(hx - .2 * u, hy - 1.6 * u), (hx + 1.6 * u, hy - 1.2 * u), (hx + 2.3 * u + flow, hy + 3.5 * u),
                (hx + 2.0 * u + flow, hy + 6.8 * u), (hx + .9 * u + flow, hy + 6.2 * u), (hx + .3 * u, hy + 2.6 * u)], fill=hair)
+    for k_, (a0_, a1_) in enumerate(((.9, 1.7), (1.4, 2.0))):                                    # mechones con brillo
+        d.line([(hx + a0_ * u, hy + .4 * u), (hx + a1_ * u + flow, hy + (5.2 + k_ * .8) * u)], fill=hair_hi, width=1)
     # vestido: hombros, busto, cintura marcada, cadera, falda a la rodilla
     body_pts = [(cx - 1.5 * u, 4.3 * u), (cx + 1.2 * u, 4.3 * u),               # hombros
                 (cx + 1.0 * u, 6.2 * u), (cx + .9 * u + sway * .3, 8.6 * u),       # espalda y cintura
@@ -2178,21 +2666,19 @@ def woman_in_red(h, frame, phase=None, amp=.4):
     limb(d, (cx + .1 * u, 4.8 * u), (cx + sw * .5, 7.6 * u), 1.4 * u, 1.2 * u, skin)
     limb(d, (cx + sw * .5, 7.6 * u), (cx + sw, 10.2 * u), 1.2 * u, 1.0 * u, skin)
     d.rectangle([cx + sw - .7 * u, 10.0 * u, cx + sw + .6 * u, 10.9 * u], fill=(30, 20, 24))
-    # cabeza
+    # cabeza: misma cara de perfil que el resto (pestañas, labios rojos), pelo rubio con brillo
     d.rectangle([cx - .55 * u, 3.4 * u, cx + .25 * u, 4.4 * u], fill=skin)                         # cuello fino
-    d.ellipse([hx - 1.3 * u, hy - 1.7 * u, hx + 1.3 * u, hy + 1.6 * u], fill=skin)
-    d.chord([hx - 1.5 * u, hy - 2.0 * u, hx + 1.6 * u, hy + 1.1 * u], 170, 360, fill=hair)
-    d.polygon([(hx - 1.5 * u, hy - 1.1 * u), (hx - .4 * u, hy - 1.9 * u), (hx - .9 * u, hy - .2 * u)], fill=hair)  # flequillo
-    d.line([(hx - .3 * u, hy - 1.7 * u), (hx + 1.2 * u, hy - 1.2 * u)], fill=hair_hi, width=1)
-    d.point((hx - .9 * u, hy - .3 * u), fill=(40, 30, 40))                                         # ojo
-    d.line([(hx - 1.2 * u, hy + .75 * u), (hx - .75 * u, hy + .75 * u)], fill=(200, 16, 40), width=1)  # labios
+    look_w = dict(skin=skin, hair=hair, female=True, hair_style="long")
+    tr_w = dict(face_traits(look_w), nose=.82, chin=.02, glasses=None, lipstick=True)
+    patch, px0, py0 = head_patch(u, look_w, hx, hy, phase=phase, traits=tr_w)
+    paste_patch(im, patch, px0, py0)
     out_ = Image.new("RGBA", im.size, (0, 0, 0, 0))
     out_.paste(im, (0, int(round(drop))))                 # el pie de apoyo toca el piso
     return out_
 
 
 AGENT = dict(coat=(36, 40, 40), shirt=(226, 230, 222), skin=(214, 172, 140), hair=(28, 24, 20), tie=(8, 8, 8),
-             shades=(6, 6, 8), earpiece=(200, 200, 190), pants=(30, 32, 34), coat_len=13.5)
+             shades=(6, 6, 8), earpiece=(200, 200, 190), pants=(30, 32, 34), coat_len=13.5, hair_style="slick")
 WY = LANE_FAR
 WH, APPEAR, TURN = round(PERSP_K * (WY - HORIZON)), 14.3 + SHIFT, 18.6 + SHIFT                                            # carril medio: entre la multitud y los protagonistas
 W_WORLD = 47 - NEAR_SPEED                                # su velocidad propia (WV relativo menos la cámara)
@@ -2242,34 +2728,6 @@ def _seg(d, p0, p1, w0, w1, col):
     limb(d, p0, p1, w0, w1, col)
 
 
-HEADS = {
-    # mira a la izquierda. H pelo, h brillo del pelo, S piel, s sombra, B barba, G lente, M marco, E oreja, K lente
-    "neo": (["..HhHHH.",
-             ".HhHHhHH",
-             "HHHHHHhH",
-             "HSHHHHHH",
-             "GGGMMEHH",
-             "SSSSsEHH",
-             ".SSSSsH.",
-             ".BBBBs..",
-             "..BBss..",
-             "...ss..."],
-            {"H": (54, 36, 24), "h": (98, 70, 48), "S": (212, 166, 134), "s": (176, 130, 102), "B": (128, 92, 70),
-             "G": (24, 32, 38), "M": (184, 190, 194), "E": (190, 140, 110)}),
-    "morpheus": (["....o....",
-                  ".o..o..o.",
-                  "..o.o.o..",
-                  "...oOo...",
-                  "oKKkOOooo",
-                  "...oOo...",
-                  "..o.o.o..",
-                  ".o..o..o.",
-                  "....d....",
-                  "...dd...."],
-                 {"o": (232, 124, 88), "O": (252, 176, 138), "K": (12, 14, 14), "k": (60, 64, 64), "d": (176, 88, 62)}),
-}
-
-
 def claude_spark(size=13):
     """Asterisco tipo logo de Claude: rayos en cuña que se afinan, largos levemente desparejos."""
     S8 = 8
@@ -2298,42 +2756,45 @@ def claude_spark(size=13):
     return out
 
 
-def stamp_head(im, kind, neck_x, neck_y):
+LUCAS_HEAD = dict(skin=(212, 166, 134), hair=(52, 34, 22), hair_style="curly_big", shades=(28, 44, 56),
+                  frame=(186, 192, 196), frame_full=True, beard=(92, 64, 46), stubble=True)
+LUCAS_TRAITS = dict(nose=1.22, chin=.05, brow=2, glasses=None, style="curly_big", mustache=False, iris=(46, 30, 22))
+
+
+def stamp_head(im, kind, neck_x, neck_y, collar_y):
+    """Cabeza de los protagonistas, a S x. neck_*: base del cuello; collar_y: borde de arriba del cuello del tapado."""
     if kind == "morpheus":                                   # cara de Claude: el logo, con lentes redondos
-        sp = claude_spark(13)
-        x0, y0 = int(round(neck_x - sp.width / 2 - .5)), int(round(neck_y - sp.height - 1))
-        px_ = im.load()
-        K_, k_ = (12, 14, 14, 255), (44, 48, 48, 255)
-        for (xx_, yy_), col in (((3, 5), K_), ((4, 5), K_), ((3, 6), K_), ((4, 6), k_), ((5, 6), (90, 94, 94, 255)),
-                                ((6, 5), K_), ((7, 5), K_), ((6, 6), K_), ((7, 6), k_), ((8, 6), (90, 94, 94, 255))):
-            sp.putpixel((xx_, yy_), col)
-        sp.putpixel((3, 5), (150, 160, 160, 255))                                                # reflejo
-        im.alpha_composite(sp, (max(0, x0), max(0, y0)))
-        for yy_ in range(2):                                                                     # cuello
-            for xx_ in range(-1, 1):
-                X_, Y_ = int(round(neck_x)) + xx_, int(round(neck_y)) - yy_
-                if 0 <= X_ < im.width and 0 <= Y_ < im.height:
-                    px_[X_, Y_] = (176, 88, 62, 255)
+        sz = 13 * S
+        sp = claude_spark(sz)
+        x0, y0 = int(round(neck_x - sp.width / 2 - .5 * S)), int(round(neck_y - sp.height - 1 * S))
+        d_ = ImageDraw.Draw(sp)
+        g = sz / 13                                          # unidad de la grilla original de 13 px
+        for cxl in (4.0, 7.0):                               # quevedos ovalados, oscuros, con un brillo
+            d_.ellipse([(cxl - 1.05) * g, (6.0 - .95) * g, (cxl + 1.05) * g, (6.0 + .95) * g], fill=(12, 14, 14, 255))
+            d_.ellipse([(cxl - .55) * g, (6.0 - .2) * g, (cxl + .95) * g, (6.0 + .9) * g], fill=(40, 44, 46, 255))
+            d_.ellipse([(cxl - 1.05) * g, (6.0 - .95) * g, (cxl + .9) * g, (6.0 + .75) * g], fill=(14, 16, 16, 255))
+            d_.ellipse([(cxl - .75) * g, (6.0 - .7) * g, (cxl - .2) * g, (6.0 - .2) * g], fill=(150, 162, 162, 255))
+        d_.line([(5.0 * g, 5.75 * g), (6.0 * g, 5.75 * g)], fill=(12, 14, 14, 255), width=max(1, int(g * .45)))   # puente
+        d_.line([(8.0 * g, 5.8 * g), (10.4 * g, 5.5 * g)], fill=(12, 14, 14, 255), width=max(1, int(g * .35)))    # patilla
+        paste_patch(im, sp, x0, y0)
+        d = ImageDraw.Draw(im)                                                                    # cuello
+        d.rectangle([neck_x - .6 * S, neck_y - 1.8 * S, neck_x + .6 * S, min(neck_y, collar_y + .6 * S)], fill=(160, 78, 56))
         return
-    rows, pal = HEADS[kind]
-    px_ = im.load()
-    h_, w_ = len(rows), len(rows[0])
-    x0 = int(round(neck_x - w_ / 2 + (0 if kind == "neo" else 0)))
-    y0 = int(round(neck_y - h_ + 1))
-    for yy_, row in enumerate(rows):
-        for xx_, ch in enumerate(row):
-            if ch != ".":
-                X_, Y_ = x0 + xx_, y0 + yy_
-                if 0 <= X_ < im.width and 0 <= Y_ < im.height:
-                    px_[X_, Y_] = pal[ch] + (255,)
+    # Lucas: cara de perfil a buena resolución (rulos, anteojos rectangulares plateados, barba de días)
+    u_h = 2.03 * S
+    hx, hy = neck_x - .1 * u_h, neck_y - 2.4 * u_h
+    d = ImageDraw.Draw(im)
+    d.rectangle([hx - .45 * u_h, hy + 1.0 * u_h, hx + .62 * u_h, collar_y + .5 * S], fill=_sh(LUCAS_HEAD["skin"], .8))   # cuello
+    patch, px0, py0 = head_patch(u_h, LUCAS_HEAD, hx, hy, traits=LUCAS_TRAITS)
+    paste_patch(im, patch, px0, py0)
 
 
 def hero(kind, H_, phase=0.0, amp=.36, facing_right=False, arms_back=0.0):
     """Claude (Morpheus) o Lucas (Neo) de perfil, caminando hacia la izquierda. Dibujado a 4x y reducido."""
     st = HERO_STYLE[kind]
-    S_ = 4
-    Hs = H_ * S_
-    pad_top = int(.08 * Hs)                                   # lugar para el pelo / la chispa
+    S_ = 4                                                    # supermuestreo sobre la resolución final (S x)
+    Hs = H_ * S * S_
+    pad_top = int(.12 * Hs)                                   # lugar para el pelo / la chispa
     Wc = int(.62 * Hs)
     img = Image.new("RGBA", (Wc, int(Hs + pad_top + .1 * Hs)), (0, 0, 0, 0))
     d = ImageDraw.Draw(img)
@@ -2449,8 +2910,9 @@ def hero(kind, H_, phase=0.0, amp=.36, facing_right=False, arms_back=0.0):
         _poly(d, [(XL(-.04, .16), Yd(.16)), (XL(.05, .15), Yd(.15)), (XL(.06, .2), Yd(.2)), (XL(-.06, .24), Yd(.24))],
               dark(coat, 1.15))
     neck_x, neck_y = XL(-.01, .165) / S_, Yd(.165) / S_                   # base del cuello (en píxeles finales)
+    collar_y = Yd(.12 if st["collar"] == "mao" else .15) / S_
     out = _finish(img, int(Wc / S_), int(img.height / S_)).copy()
-    stamp_head(out, kind, neck_x, neck_y)
+    stamp_head(out, kind, neck_x, neck_y, collar_y)
     # recortar abajo para que la suela toque el piso (la imagen termina en la suela)
     a = np.asarray(out)[..., 3] > 0
     bottom = int(np.nonzero(a.any(1))[0].max()) + 1
@@ -2462,13 +2924,13 @@ def hero(kind, H_, phase=0.0, amp=.36, facing_right=False, arms_back=0.0):
 
 def protagonist(frames, idle, ox, cyc, delay=0.0, idle_seq=None):
     walk = "".join(f'<g opacity="{1 if i == 0 else 0}" style="animation:wk{i} {cyc:.3f}s {delay:.3f}s infinite steps(1)">'
-                   f'{image(f, ox, FEET - f.height + 1, up=1)}</g>' for i, f in enumerate(frames))
+                   f'{image(f, ox, FEET + 1 - lh(f))}</g>' for i, f in enumerate(frames))
     if not idle_seq:
         return (f'<g style="{WALK_VIS}">{walk}</g>'
-                f'<g opacity="0" style="{FRZ_VIS}">{image(idle, ox, FEET - idle.height + 1, up=1)}</g>')
+                f'<g opacity="0" style="{FRZ_VIS}">{image(idle, ox, FEET + 1 - lh(idle))}</g>')
     seq = ""
     for (t0, t1), im_ in idle_seq:                        # secuencia de poses durante el final
-        seq += f'<g opacity="0" style="{window(t0, t1)}">{image(im_, ox, FEET - im_.height + 1, up=1)}</g>'
+        seq += f'<g opacity="0" style="{window(t0, t1)}">{image(im_, ox, FEET + 1 - lh(im_))}</g>'
     return f'<g style="{WALK_VIS}">{walk}</g>{seq}'
 
 
@@ -2500,6 +2962,56 @@ body.append(rect(-60, -80, W + 120, H + 160, "#000", f' opacity="0" style="anima
 rrng = random.Random(1999)
 RAIN_GLYPHS = [c for c in MINI if c not in " .,'"]
 STEP_Y = 6
+# Glifos de 5x7 tipo katakana de media anchura (como en la película), números y algún signo; se dibujan a S x
+# (un punto = 2 px dibujados, ~2/3 de píxel lógico) y se espejan al azar. Cada columna es una tira raster.
+KATA = [
+    ["#####", "....#", "...#.", "..##.", "..#..", ".#...", "#...."], ["....#", "...#.", "..##.", ".#.#.", "#..#.", "...#.", "...#."],
+    ["..#..", "#####", "#...#", "....#", "...#.", "..#..", ".#..."], [".....", "#####", "..#..", "..#..", "..#..", "..#..", "#####"],
+    ["...#.", "#####", "...#.", "..##.", ".#.#.", "#..#.", "..##."], [".#...", "#####", ".#..#", ".#..#", ".#..#", "#...#", "#..##"],
+    ["..#..", "#####", "..#..", "#####", "..#..", "..#..", "..#.."], [".#...", ".####", "#...#", "....#", "...#.", "..#..", "##..."],
+    [".#...", ".####", "#..#.", "...#.", "...#.", "..#..", ".#..."], [".....", "#####", "....#", "....#", "....#", "....#", "#####"],
+    [".#.#.", "#####", ".#.#.", ".#.#.", "...#.", "..#..", ".#..."], ["#....", ".#..#", "#...#", ".#..#", "....#", "...#.", "###.."],
+    ["#.#.#", "#.#.#", "#.#.#", "....#", "...#.", "..#..", "##..."], [".###.", ".....", "#####", "..#..", "..#..", ".#...", "#...."],
+    ["..#..", "#####", "..#..", "..#..", "..#..", ".#...", "#...."], ["#....", "#..##", "###..", "#....", "#....", "#...#", ".###."],
+    [".....", "#####", "....#", "....#", "...#.", "..#..", "##..."], ["..#..", "#####", "..#..", "#.#.#", "#.#.#", "..#..", "..#.."],
+    [".###.", "....#", ".###.", "....#", ".....", ".###.", "....#"], ["..#..", "..#..", ".#...", ".#..#", "#...#", "#####", "....#"],
+    [".#...", "#####", ".#..#", "..#..", "..#..", "..#..", "..#.."], [".###.", ".....", "#####", "....#", "...#.", "..#..", "##..."],
+    ["#...#", "#...#", "#...#", "....#", "...#.", "..#..", ".#..."], ["#####", "....#", "...#.", "..#..", ".#...", "#....", "#####"],
+    [".###.", "#...#", "#..##", "#.#.#", "##..#", "#...#", ".###."], ["..#..", ".##..", "..#..", "..#..", "..#..", "..#..", ".###."],
+    [".###.", "#...#", "....#", "..##.", ".#...", "#....", "#####"], [".###.", "#...#", "....#", "..##.", "....#", "#...#", ".###."],
+    ["...#.", "..##.", ".#.#.", "#..#.", "#####", "...#.", "...#."], ["#####", "#....", "####.", "....#", "....#", "#...#", ".###."],
+    [".###.", "#...#", "#...#", ".####", "....#", "...#.", ".##.."], [".....", ".....", "#####", ".....", "#####", ".....", "....."],
+    [".....", "..#..", "#.#.#", ".###.", "#.#.#", "..#..", "....."], ["..#..", "..#..", "..#..", "..#..", "..#..", "..#..", "..#.."],
+]
+DOT = 2                                                   # px dibujados por punto del glifo
+GPAD = 4                                                  # margen para el brillo de la punta
+
+
+def rain_strip(glyphs):
+    """glyphs: [(bitmap, espejado, color, alfa)] de arriba (cola) a abajo (punta). Tira RGBA a S x con brillo en la punta."""
+    n_ = len(glyphs)
+    Wp, Hp = 5 * DOT + 2 * GPAD, int(n_ * STEP_Y * S) + 2 * GPAD
+    a_ = np.zeros((Hp, Wp, 4))
+    head = np.zeros((Hp, Wp))
+    for j_, (bm, mir, col, al) in enumerate(glyphs):
+        y0_ = GPAD + int(round(j_ * STEP_Y * S))
+        for r_, row in enumerate(bm):
+            row = row[::-1] if mir else row
+            for c_, ch_ in enumerate(row):
+                if ch_ == "#":
+                    ys_, xs_ = y0_ + r_ * DOT, GPAD + c_ * DOT
+                    a_[ys_:ys_ + DOT, xs_:xs_ + DOT, :3] = col
+                    a_[ys_:ys_ + DOT, xs_:xs_ + DOT, 3] = al * 255
+                    if j_ == n_ - 1:
+                        head[ys_:ys_ + DOT, xs_:xs_ + DOT] = 1
+    halo = np.asarray(Image.fromarray((head * 255).astype(np.uint8), "L").filter(ImageFilter.GaussianBlur(2.2)), float) / 255
+    glow_a = np.clip(halo * 1.6, 0, 1) * .55 * 255
+    m_ = glow_a > a_[..., 3]                              # el halo va por detrás del glifo
+    a_[m_, :3] = (120, 255, 150)
+    a_[m_, 3] = glow_a[m_]
+    return Image.fromarray(np.clip(a_, 0, 255).astype(np.uint8), "RGBA")
+
+
 rain2 = []
 for cx_ in range(-12, W + 12, 5):
     n = rrng.randint(9, 18)
@@ -2510,22 +3022,23 @@ for cx_ in range(-12, W + 12, 5):
     css.append(f"@keyframes {k}{{from{{transform:translateY({-n * STEP_Y - 40}px)}}to{{transform:translateY({H + 40}px)}}}}")
     glyphs = []
     for j in range(n):                                   # j = 0 arriba (cola) ... n-1 abajo (punta)
-        g = mini_px(rrng.choice(RAIN_GLYPHS), cx_, j * STEP_Y)
-        if rrng.random() < .5:                           # algunos invertidos: se parecen más a katakana
-            g = {(2 * cx_ + 2 - x, y) for x, y in g}
+        ch = rrng.choice(RAIN_GLYPHS)
+        mir = rrng.random() < .5                         # algunos espejados, como en la película
         t_ = j / max(1, n - 1)
         if j == n - 1:
-            col, op = "#e6ffe9", 1.0
+            col, op = (230, 255, 233), 1.0
         elif j == n - 2:
-            col, op = "#8dffa6", .95
+            col, op = (141, 255, 166), .95
         else:
-            col, op = "#22c55a", .12 + .75 * t_ ** 1.4
-        glyphs.append(f'<g fill="{col}" opacity="{op:.2f}">{runs(g)}</g>')
-    rain2.append(f'<g style="animation:{k} {dur:.2f}s {dl:.2f}s infinite linear">{"".join(glyphs)}</g>')
+            col, op = (34, 197, 90), .12 + .75 * t_ ** 1.4
+        glyphs.append((KATA[(RAIN_GLYPHS.index(ch) * 7 + j) % len(KATA)], mir, col, op))
+    strip = rain_strip(glyphs)
+    rain2.append(f'<g style="animation:{k} {dur:.2f}s {dl:.2f}s infinite linear">'
+                 f'{image(strip, cx_ - .17 - GPAD / S, -.3 - GPAD / S)}</g>')
 body.append(f'<g opacity="0" style="animation:rainvis {T}s infinite linear">{"".join(rain2)}</g>')
 
 HERO_START = len(body)
-body.append(f'<ellipse cx="{CLX + cl[0].width / 2}" cy="{FEET}" rx="8" ry="1.6" fill="#000" opacity=".22"/>')
+body.append(f'<ellipse cx="{fnum(CLX + lw(cl[0]) / 2)}" cy="{FEET}" rx="8" ry="1.6" fill="#000" opacity=".22"/>')
 _steps = np.linspace(ARMS0, ARMS1, len(cl_back) + 1)
 cl_seq = [((F0, ARMS0), cl_idle)] + [((a_, b_), im_) for a_, b_, im_ in zip(_steps, _steps[1:], cl_back[:-1])] \
     + [((_steps[-2], T), cl_back[-1])]
@@ -2544,10 +3057,10 @@ LAG = NEAR_SPEED * (F0 - T_STOP)                         # cuánto queda atrás 
 lu_stand_l = hero("neo", PH, 0.0, .04)                   # parado mirándola venir
 lu_stand_r = hero("neo", PH, 0.0, .04, facing_right=True)   # se da vuelta y la sigue con la mirada
 GAP = 7                                                  # distancia final entre los dos (px)
-TARGET = CLX + cl_idle.width + GAP - (LUX + (lu_stand_l.width - lu_stand_l.width))   # borde izq. de Lucas al llegar
+TARGET = CLX + lw(cl_idle) + GAP - LUX   # borde izq. de Lucas al llegar
 TARGET = TARGET - LUX * 0                                # (desplazamiento relativo a LUX)
 D_APPROACH = TARGET - (LUX + LAG) + LUX - LUX            # (negativo: camina hacia la izquierda)
-D_APPROACH = (CLX + cl_idle.width + GAP) - (LUX + LAG)
+D_APPROACH = (CLX + lw(cl_idle) + GAP) - (LUX + LAG)
 A_ap, cyc_ap = gait_params(PH, abs(D_APPROACH) / (L_ARRIVE - L_TURN - .2), cadence=1.0, amax=.5)
 lu_approach = walk_frames(lambda ph, a: hero("neo", PH, ph, a), A_ap)
 css.append(f"@keyframes lucx{{0%,{pct(T_STOP):.3f}%{{transform:translateX(0)}}{pct(F0):.3f}%,{pct(L_TURN + .2):.3f}%"
@@ -2561,22 +3074,22 @@ lface = window(L_ARRIVE, T)
 
 def frames_svg(frames, cyc, delay=0.0):
     return "".join(f'<g opacity="{1 if i == 0 else 0}" style="animation:wk{i} {cyc:.3f}s {delay:.3f}s infinite steps(1)">'
-                   f'{image(f, LUX, FEET - f.height + 1, up=1)}</g>' for i, f in enumerate(frames))
+                   f'{image(f, LUX, FEET + 1 - lh(f))}</g>' for i, f in enumerate(frames))
 
 
-lucas_svg = (f'<ellipse cx="{LUX + lu[0].width / 2}" cy="{FEET}" rx="8" ry="1.6" fill="#000" opacity=".22"/>'
+lucas_svg = (f'<ellipse cx="{fnum(LUX + lu[0].width / S / 2)}" cy="{FEET}" rx="8" ry="1.6" fill="#000" opacity=".22"/>'
              f'<g style="animation:lwalk {T}s infinite linear">{frames_svg(lu, cyc_p, -cyc_p * .4)}</g>'
-             f'<g opacity="0" style="{lstand_l}">{image(lu_stand_l, LUX, FEET - lu_stand_l.height + 1, up=1)}</g>'
-             f'<g opacity="0" style="{lstand_r}">{image(lu_stand_r, LUX, FEET - lu_stand_r.height + 1, up=1)}</g>'
+             f'<g opacity="0" style="{lstand_l}">{image(lu_stand_l, LUX, FEET + 1 - lh(lu_stand_l))}</g>'
+             f'<g opacity="0" style="{lstand_r}">{image(lu_stand_r, LUX, FEET + 1 - lh(lu_stand_r))}</g>'
              f'<g opacity="0" style="{lapproach}">{frames_svg(lu_approach, cyc_ap)}</g>'
-             f'<g opacity="0" style="{lface}">{image(lu_stand_l, LUX, FEET - lu_stand_l.height + 1, up=1)}</g>'
+             f'<g opacity="0" style="{lface}">{image(lu_stand_l, LUX, FEET + 1 - lh(lu_stand_l))}</g>'
              )
 body.append(f'<g style="animation:lucx {T}s infinite linear">{lucas_svg}</g>')
 body[HERO_START:] = [f'<g opacity="0" style="animation:heroio {T}s infinite linear">{"".join(body[HERO_START:])}</g>']
 
 # ============================================================ cámara más cerca
 scene_svg = "".join(body)
-body = [f'<g transform="translate({W / 2} {HORIZON}) scale({ZOOM}) translate({-W / 2} {-HORIZON})">{scene_svg}</g>']
+body = [f'<g transform="translate({W / 2} {HORIZON - CAM_DY}) scale({ZOOM}) translate({-W / 2} {-HORIZON})">{scene_svg}</g>']
 
 # ============================================================ viñeta, franjas y tinte verde
 defs.append('<radialGradient id="vig" cx=".5" cy=".5" r=".75"><stop offset=".55" stop-color="#000" stop-opacity="0"/>'
