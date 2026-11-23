@@ -271,6 +271,124 @@ def facade(u, v, hb, base, aw, det, bid, kind="shop", corner_edge=False):
     return np.clip(c, 0, 255)
 
 
+# ============================================================ vehículos (dibujados a 4x y reducidos)
+VS = 4                                                   # supermuestreo
+
+
+def _shade(c, k):
+    return tuple(int(max(0, min(255, v * k))) for v in c)
+
+
+def _finish(big, w, h):
+    """Reduce el dibujo supermuestreado a pixel art: color promediado, alfa binario."""
+    sm = big.resize((w, h), Image.BOX)
+    a = np.asarray(sm, dtype=float)
+    out = a.copy()
+    alpha = a[..., 3] > 110
+    out[..., :3] = np.where(a[..., 3:4] > 0, a[..., :3] / np.maximum(a[..., 3:4], 1) * 255, 0)
+    out[..., 3] = alpha * 255
+    return Image.fromarray(np.clip(out, 0, 255).astype(np.uint8), "RGBA")
+
+
+def vehicle_side(length, body, kind="sedan"):
+    """Vehículo de perfil mirando a la izquierda. Altura con proporción real (auto ~1.45 m x 4.6 m)."""
+    ratio = {"sedan": .31, "taxi": .31, "van": .42, "bus": .30}[kind]
+    L, Hh = length * VS, length * ratio * VS
+    top_pad = int(Hh * (.14 if kind == "taxi" else .02))
+    im = Image.new("RGBA", (int(L), int(Hh) + top_pad + VS * 2), (0, 0, 0, 0)); d = ImageDraw.Draw(im)
+    P = lambda pts: [(x * L, y * Hh + top_pad) for x, y in pts]
+    hi, mid, lo, dark = _shade(body, 1.22), body, _shade(body, .78), _shade(body, .5)
+    glass, glass_hi = (46, 58, 64), (120, 140, 140)
+    # sombra en el piso
+    d.ellipse([L * .02, Hh + top_pad - Hh * .06, L * .98, Hh + top_pad + Hh * .07], fill=(0, 0, 0, 120))
+    if kind == "bus":
+        d.rounded_rectangle([0, top_pad, L - 1, Hh * .86 + top_pad], radius=Hh * .06, fill=mid)
+        d.rectangle([0, Hh * .62 + top_pad, L - 1, Hh * .86 + top_pad], fill=lo)
+        d.rectangle([0, Hh * .58 + top_pad, L - 1, Hh * .62 + top_pad], fill=hi)                       # franja
+        d.polygon(P([(.0, .08), (.07, .08), (.07, .52), (.0, .52)]), fill=glass)                       # parabrisas
+        x = .1
+        while x < .95:
+            d.rectangle(P([(x, .1), (x + .075, .48)])[0] + P([(x + .075, .48)])[0], fill=glass)
+            d.line(P([(x + .005, .12), (x + .03, .12)]), fill=glass_hi, width=VS)
+            x += .088
+        d.rectangle(P([(.14, .12), (.2, .84)])[0] + P([(.2, .84)])[0], fill=_shade(glass, 1.2))         # puerta
+        d.line(P([(.17, .12), (.17, .84)]), fill=dark, width=VS)
+        wheels = [(.16, .86), (.78, .86)]
+        r = Hh * .12
+    else:
+        if kind == "van":
+            shell = [(0, .56), (.02, .44), (.16, .34), (.26, .06), (.3, .02), (.97, .02), (1, .07), (1, .76), (.97, .84),
+                     (.03, .84), (0, .76)]
+            win = [(.27, .34), (.32, .08), (.5, .08), (.5, .34)]
+            win2 = [(.53, .08), (.95, .08), (.95, .34), (.53, .34)]
+            wheels = [(.17, .82), (.82, .82)]
+        else:
+            shell = [(0, .58), (.01, .48), (.06, .44), (.25, .39), (.31, .37), (.4, .07), (.45, .03), (.66, .03), (.72, .07),
+                     (.82, .34), (.96, .37), (1, .44), (1, .74), (.97, .81), (.03, .81), (0, .74)]
+            win = [(.34, .36), (.42, .09), (.555, .085), (.555, .355)]
+            win2 = [(.575, .085), (.67, .085), (.71, .11), (.79, .345), (.575, .35)]
+            wheels = [(.19, .78), (.8, .78)]
+        r = Hh * (.2 if kind != "van" else .18)
+        d.polygon(P(shell), fill=mid)
+        d.polygon(P([(x, max(y, .6)) for x, y in shell]), fill=lo)                                      # mitad baja en sombra
+        d.line(P([(.06, .45), (.97, .4)]), fill=hi, width=VS * 2)                                       # línea de hombros
+        d.polygon(P(win), fill=glass); d.polygon(P(win2), fill=glass)
+        d.line(P([(win[0][0] + .03, win[0][1] - .05), (win[1][0] + .05, win[1][1] + .06)]), fill=glass_hi, width=VS)  # reflejo
+        d.line(P([(.03, .63), (.98, .63)]), fill=_shade(body, 1.05), width=VS)                         # moldura
+        for dx in ((.36, .56, .76) if kind != "van" else (.27, .52)):
+            d.line(P([(dx, .38), (dx, .78)]), fill=dark, width=max(1, VS // 2))                         # puertas
+        for hx in ((.45, .65) if kind != "van" else (.36,)):
+            d.rectangle(P([(hx, .47), (hx + .04, .5)])[0] + P([(hx + .04, .5)])[0], fill=hi)           # manijas
+        d.rectangle(P([(0, .62), (.06, .76)])[0] + P([(.06, .76)])[0], fill=(40, 42, 44))               # paragolpes
+        d.rectangle(P([(.94, .62), (1, .76)])[0] + P([(1, .76)])[0], fill=(40, 42, 44))
+        d.rectangle(P([(0, .47), (.035, .55)])[0] + P([(.035, .55)])[0], fill=(250, 244, 200))          # faro
+        d.rectangle(P([(.965, .44), (1, .54)])[0] + P([(1, .54)])[0], fill=(220, 30, 36))                # luz trasera
+        if kind == "taxi":
+            d.rectangle([L * .5, top_pad - Hh * .12, L * .6, top_pad + Hh * .04], fill=(240, 236, 200))
+            d.line(P([(.08, .55), (.95, .52)]), fill=(30, 30, 30), width=VS * 2)                        # franja
+    for wx, wy in wheels:                                                                                 # ruedas
+        cx, cy = wx * L, wy * Hh + top_pad
+        d.ellipse([cx - r * 1.18, cy - r * 1.18, cx + r * 1.18, cy + r * 1.18], fill=(22, 22, 24))      # pasarrueda
+        d.ellipse([cx - r, cy - r, cx + r, cy + r], fill=(14, 14, 16))
+        d.ellipse([cx - r * .58, cy - r * .58, cx + r * .58, cy + r * .58], fill=(150, 154, 156))         # llanta
+        d.ellipse([cx - r * .4, cy - r * .4, cx + r * .4, cy + r * .4], fill=(104, 108, 110))
+        d.ellipse([cx - r * .14, cy - r * .14, cx + r * .14, cy + r * .14], fill=(40, 40, 42))
+    return _finish(im, int(length), int(im.height / VS))
+
+
+def vehicle_end(width, body, rear=False):
+    """Auto visto de frente (faros) o de atrás (luces rojas). Alto/ancho reales (~1.45 m / 1.8 m)."""
+    Wp, Hp = width * VS, width * .82 * VS
+    im = Image.new("RGBA", (int(Wp), int(Hp)), (0, 0, 0, 0)); d = ImageDraw.Draw(im)
+    P = lambda pts: [(x * Wp, y * Hp) for x, y in pts]
+    hi, mid, lo = _shade(body, 1.2), body, _shade(body, .72)
+    d.ellipse(P([(.0, .9), (1, 1.0)])[0] + P([(1, 1.0)])[0], fill=(0, 0, 0, 120))                        # sombra
+    for tx in (.06, .76):                                                                                  # cubiertas
+        d.rectangle(P([(tx, .78), (tx + .18, .99)])[0] + P([(tx + .18, .99)])[0], fill=(14, 14, 16))
+    d.polygon(P([(.16, .02), (.84, .02), (.95, .44), (.05, .44)]), fill=lo)                               # cabina
+    d.polygon(P([(.2, .07), (.8, .07), (.89, .41), (.11, .41)]), fill=(52, 66, 72) if not rear else (40, 50, 56))
+    d.line(P([(.3, .1), (.42, .38)]), fill=(140, 160, 160), width=VS)                                      # reflejo
+    d.rounded_rectangle(P([(.01, .42), (.99, .86)])[0] + P([(.99, .86)])[0], radius=VS * 2, fill=mid)    # carrocería
+    d.line(P([(.03, .46), (.97, .46)]), fill=hi, width=VS)
+    d.rectangle(P([(-.03, .36), (.04, .44)])[0] + P([(.04, .44)])[0], fill=lo)                            # espejos
+    d.rectangle(P([(.96, .36), (1.03, .44)])[0] + P([(1.03, .44)])[0], fill=lo)
+    lamp = (220, 30, 40) if rear else (252, 246, 210)
+    d.rectangle(P([(.05, .52), (.24, .62)])[0] + P([(.24, .62)])[0], fill=lamp)                            # faros / luces
+    d.rectangle(P([(.76, .52), (.95, .62)])[0] + P([(.95, .62)])[0], fill=lamp)
+    if not rear:
+        d.rectangle(P([(.3, .52), (.7, .66)])[0] + P([(.7, .66)])[0], fill=(30, 34, 34))                  # parrilla
+        for gx in (.36, .44, .52, .6):
+            d.line(P([(gx, .54), (gx, .64)]), fill=(70, 74, 74), width=max(1, VS // 2))
+    else:
+        d.rectangle(P([(.28, .5), (.72, .6)])[0] + P([(.72, .6)])[0], fill=lo)                            # baúl
+    d.rectangle(P([(.38, .7), (.62, .78)])[0] + P([(.62, .78)])[0], fill=(226, 226, 210))                  # patente
+    d.rectangle(P([(.0, .78), (1, .86)])[0] + P([(1, .86)])[0], fill=(40, 42, 44))                         # paragolpes
+    return _finish(im, int(width), int(Hp / VS))
+
+
+VEH_COLS = [(150, 36, 40), (52, 72, 110), (196, 194, 184), (36, 40, 44), (80, 98, 72), (120, 120, 124), (96, 60, 44)]
+
+
 # fachada cercana + vereda: un tile de 320 px que se repite y se desplaza
 near = np.zeros((H, W, 4))
 AVE_TOP = 74                                                          # base de los edificios (vereda de enfrente)
@@ -426,6 +544,20 @@ def street_corridor():
 
 
 corr, cy0 = street_corridor()
+# fila de autos esperando el semáforo (carril de mano contraria, vistos de frente con los faros prendidos)
+QW = 15                                                  # ancho de un auto a la distancia z0
+for zq, colq in sorted([(112, VEH_COLS[2]), (150, VEH_COLS[1]), (198, VEH_COLS[0]), (262, VEH_COLS[5])], reverse=True):
+    car = vehicle_end(max(4, round(QW * Z0 / zq)), colq)
+    ca = np.asarray(car, dtype=float)
+    qx = VPX + F * (-WR * .5) / zq - car.width / 2 - GX
+    qy = VPY + F * HC / zq - car.height - cy0
+    t_h = 1 - np.exp(-(zq - Z0) / 1100)
+    ca[..., :3] = ca[..., :3] * (1 - t_h) + np.array([196, 210, 186]) * t_h
+    for yy_q in range(car.height):
+        for xx_q in range(car.width):
+            ty_, tx_ = int(qy) + yy_q, int(qx) + xx_q
+            if ca[yy_q, xx_q, 3] > 0 and 0 <= ty_ < corr.shape[0] and 0 <= tx_ < corr.shape[1]:
+                corr[ty_, tx_, :3] = ca[yy_q, xx_q, :3]; corr[ty_, tx_, 3] = 255
 cm = corr[..., 3] > 0
 reg = near[cy0:cy0 + corr.shape[0], GX:GX + GW]
 reg[cm, :3] = corr[cm, :3]; reg[cm, 3] = 255
@@ -627,45 +759,6 @@ for cx_ in range(2, W, 7):
 body.append(f'<g opacity="0" style="{FRZ_VIS}">{"".join(rain)}</g>')
 
 # ============================================================ tránsito sobre la avenida
-def car_side(w, body, bus=False):
-    """Auto (o colectivo) de perfil mirando a la izquierda."""
-    h = int(w * (.36 if bus else .4))
-    im = Image.new("RGBA", (w, h + 1), (0, 0, 0, 0)); d = ImageDraw.Draw(im)
-    dark = tuple(int(c * .7) for c in body)
-    if bus:
-        d.rectangle([0, 0, w - 1, h - 3], fill=body)
-        for wx in range(3, w - 4, 6):
-            d.rectangle([wx, 2, wx + 4, h * .45], fill=(70, 96, 96))
-        d.rectangle([0, h * .55, w - 1, h * .62], fill=dark)
-    else:
-        d.polygon([(w * .26, h * .42), (w * .36, 0), (w * .72, 0), (w * .82, h * .42)], fill=dark)    # cabina
-        d.polygon([(w * .3, h * .4), (w * .38, h * .08), (w * .53, h * .08), (w * .53, h * .4)], fill=(90, 120, 120))
-        d.polygon([(w * .56, h * .4), (w * .56, h * .08), (w * .7, h * .08), (w * .77, h * .4)], fill=(90, 120, 120))
-        d.rectangle([0, h * .4, w - 1, h * .8], fill=body)
-        d.line([(1, h * .6), (w - 2, h * .6)], fill=dark)
-    d.rectangle([0, h * .5, 1, h * .62], fill=(250, 240, 190))               # faro
-    d.rectangle([w - 2, h * .5, w - 1, h * .62], fill=(230, 40, 40))         # luz trasera
-    r = max(2, int(h * .2))
-    for wx in (w * .18, w * .8):
-        d.ellipse([wx - r, h - 2 * r, wx + r, h], fill=(14, 14, 14))
-        d.point((wx, h - r), fill=(120, 124, 120))
-    return im
-
-
-def car_rear(w, body):
-    h = int(w * .55)
-    im = Image.new("RGBA", (w, h), (0, 0, 0, 0)); d = ImageDraw.Draw(im)
-    d.rectangle([w * .18, 0, w * .82, h * .42], fill=tuple(int(c * .8) for c in body))
-    d.rectangle([w * .24, h * .08, w * .76, h * .38], fill=(40, 52, 54))                           # luneta
-    d.rectangle([0, h * .42, w - 1, h * .86], fill=body)
-    d.rectangle([w * .04, h * .5, w * .22, h * .64], fill=(240, 40, 40))                           # luces traseras
-    d.rectangle([w * .78, h * .5, w * .96, h * .64], fill=(240, 40, 40))
-    d.rectangle([w * .4, h * .6, w * .6, h * .72], fill=(220, 220, 200))                           # patente
-    d.rectangle([w * .04, h * .86, w * .2, h - 1], fill=(14, 14, 14))
-    d.rectangle([w * .8, h * .86, w * .96, h - 1], fill=(14, 14, 14))
-    return im
-
-
 # ------------------------------------------------ un auto dobla en la esquina y se pierde por la calle
 def eff(t):
     return t if t < F0 else (F0 if t < F1 else t - (F1 - F0))
@@ -683,8 +776,8 @@ z_a = F * HC / (LANE_Y - VPY)
 x_turn = VPX + F * X_LANE / z_a                        # en coordenadas del tile
 scr_turn = (tile_g(T_TURN) + x_turn) % W
 x_start = -40 + x_turn - scr_turn + NEAR_SPEED * (T_TURN - T_IN)
-side = car_side(26, TURN_COL).transpose(Image.FLIP_LEFT_RIGHT)
-rear = car_rear(24, TURN_COL)
+side = vehicle_side(76, TURN_COL, "taxi").transpose(Image.FLIP_LEFT_RIGHT)
+rear = vehicle_end(24, TURN_COL, rear=True)
 ka, kb = nid("turnA"), nid("turnB")
 css.append(f"@keyframes {ka}{{0%,{pct(T_IN):.3f}%{{transform:translate({x_start:.1f}px,{LANE_Y}px);opacity:0}}"
            f"{pct(T_IN) + .001:.3f}%{{opacity:1;transform:translate({x_start:.1f}px,{LANE_Y}px)}}"
@@ -704,25 +797,54 @@ frames.append(f"100%{{opacity:0;transform:translate({VPX:.1f}px,{VPY}px) scale(.
 css.append(f"@keyframes {kb}{{{''.join(frames)}}}")
 turn_svg = (f'<g style="animation:{ka} {T}s infinite linear">{image(side, -side.width // 2, -side.height, up=1)}</g>'
             f'<g style="animation:{kb} {T}s infinite linear">{image(rear, -rear.width // 2, -rear.height, up=1)}</g>')
-turn_svg = turn_svg + f'<g transform="translate({-W} 0)">{turn_svg}</g>'
+# va solo en la copia del tile que está en pantalla durante el giro (sin vuelta del tile en esa ventana)
+assert int(tile_g(T_IN) // W) == int(tile_g(T_GONE) // W), "el tile da la vuelta durante el giro del taxi"
+copy_off = round((scr_turn - (tile_g(T_TURN) % W) - x_turn) / W) * W
+turn_svg = f'<g transform="translate({copy_off} 0)">{turn_svg}</g>'
 body.append(f'<g style="{track(TILE0, NEAR_SPEED, W, 0, 0)}"><g style="{WALK_VIS}">{turn_svg}</g></g>')
 
-CAR_COLS = [(150, 40, 40), (60, 80, 120), (190, 186, 170), (40, 44, 48), (90, 110, 70), (170, 150, 60)]
-CSPAN, CMARG = W + 120, 60
-LANES = [(AVE_TOP + 11, -1, 5), (GROUND - 1, 1, 4)]       # (base y, sentido: -1 izquierda / 1 derecha, autos)
-for ly, dirn, n in LANES:
-    for j in range(n):
-        bus = dirn < 0 and j == 2
-        w = 46 if bus else random.randint(24, 28)
-        im = car_side(w, (200, 190, 120) if bus else random.choice(CAR_COLS), bus)
+# tamaño real respecto de la gente (persona ~37 px = 1.75 m): auto ~4.6 m de largo
+CSPAN, CMARG = W + 320, 160
+LANES = [  # (base y, sentido, k: vueltas por ciclo, vehículos [(tipo, largo)])
+    (AVE_TOP + 11, -1, -1, [("sedan", 64), ("bus", 150), ("van", 60), ("sedan", 66)]),
+    (GROUND - 1, 1, 2, [("sedan", 76), ("van", 72), ("sedan", 78), ("sedan", 74)]),
+]
+
+
+def taxi_screen_x(t):                          # posición en pantalla del taxi que dobla mientras se acerca
+    return -40 + (scr_turn + 40) * (t - T_IN) / (T_TURN - T_IN)
+
+
+def lane_phase(vehs, v):
+    """Desfasaje del carril cercano que deja un hueco libre para el taxi que dobla."""
+    gaps = CSPAN / len(vehs)
+    for off in np.arange(0, gaps, 1.0):
+        ok = True
+        for t in np.arange(T_IN, T_TURN + .01, .1):
+            tx = taxi_screen_x(t)
+            for j in range(len(vehs)):
+                cx = ((j * gaps + off + v * eff(t)) % CSPAN) - CMARG
+                if abs(cx - tx) < 86:
+                    ok = False; break
+            if not ok:
+                break
+        if ok:
+            return off
+    return 0.0
+
+
+for ly, dirn, k, vehs in LANES:
+    v = k * CSPAN / WALK                       # mismo ritmo en cada carril: no se pisan entre sí
+    gaps = CSPAN / len(vehs)
+    phase = lane_phase(vehs, v) if dirn > 0 else 0.0
+    for j, (kind, ln) in enumerate(vehs):
+        col = {"bus": (204, 186, 96), "taxi": (214, 170, 40)}.get(kind) or random.choice(VEH_COLS)
+        im = vehicle_side(ln, col, kind)
         if dirn > 0:
             im = im.transpose(Image.FLIP_LEFT_RIGHT)
-        # velocidad relativa a la cámara (que va hacia la izquierda): múltiplo del tramo para que el loop cierre
-        k = random.choice([2, 3]) if dirn > 0 else -random.choice([1, 2])
-        v = k * CSPAN / WALK
-        x0 = j * CSPAN / n + random.uniform(-10, 10)
-        spr = (f'<g style="{WALK_VIS}">{image(im, 0, -im.height, up=1)}</g>'
-               f'<g opacity="0" style="{FRZ_VIS}">{image(frozen(im), 0, -im.height, up=1)}</g>')
+        x0 = j * gaps + phase
+        spr = (f'<g style="{WALK_VIS}">{image(im, 0, -im.height + 2, up=1)}</g>'
+               f'<g opacity="0" style="{FRZ_VIS}">{image(frozen(im), 0, -im.height + 2, up=1)}</g>')
         body.append(f'<g style="{track(x0, v, CSPAN, CMARG, ly)}">{spr}</g>')
 
 # ============================================================ multitud (fila de atrás)
