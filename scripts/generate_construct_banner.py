@@ -195,7 +195,8 @@ def track(x0, v, span, margin, y):
 
 # ============================================================ fondo: ciudad del constructo (de día, verdosa)
 yy, xx = np.mgrid[0:H, 0:W]
-GROUND = 92
+GROUND = 96                                              # nuestra vereda (la avenida suma un carril de estacionamiento)
+NEAR_LANE = 91                                           # base del carril de circulación cercano
 sky = ramp(yy / H, [(0, (150, 172, 150)), (.5, (196, 210, 186)), (1, (210, 218, 196))])
 # (el skyline plano del fondo se retiró: solo queda el cielo con bruma. El bucle se conserva
 #  sin dibujar para no alterar la secuencia aleatoria del resto de la escena)
@@ -204,9 +205,9 @@ x = 0
 while x < W:
     bw, top = random.randint(14, 34), random.randint(6, 40)
     c = np.array(random.choice([(120, 138, 122), (132, 148, 128), (110, 126, 112)]), float)
-    _discard[top:GROUND, x:x + bw] = c
-    _discard[top:GROUND, x] = c + 18
-    for wy in range(top + 3, GROUND, 4):
+    _discard[top:92, x:x + bw] = c
+    _discard[top:92, x] = c + 18
+    for wy in range(top + 3, 92, 4):
         for wx in range(x + 2, min(W, x + bw - 2), 3):
             _discard[wy:wy + 2, wx] = c - 22 if random.random() < .85 else c + 30
     x += bw + random.randint(0, 2)
@@ -660,44 +661,9 @@ def officer_leg_up(h):
     return im
 
 
-# patrullero estacionado junto al cordón de enfrente, con el oficial apoyado en el paragolpe
-PCX, PCL = 44, 62                                        # posición en el tile y largo
-pcar = vehicle_side(PCL, (26, 28, 32), "police")
-pbase = AVE_TOP + 7
-pc = np.asarray(pcar, dtype=float)
-oy0 = pbase - pcar.height + 2
-off_ = officer_leg_up(34)
-oc = np.asarray(off_, dtype=float)
-ox0, oy1 = PCX - off_.width + int(off_.width * .2), pbase - off_.height + 1
-for arr, x0_, y0_ in ((oc, ox0, oy1), (pc, PCX, oy0)):
-    hh, ww = arr.shape[:2]
-    ys_, xs_ = np.nonzero(arr[..., 3] > 0)
-    ty, tx = ys_ + y0_, xs_ + x0_
-    ok = (ty >= 0) & (ty < H) & (tx >= 0) & (tx < W)
-    near[ty[ok], tx[ok], :3] = arr[ys_[ok], xs_[ok], :3]
-    near[ty[ok], tx[ok], 3] = 255
 near_rgb = posterize(np.clip(near[..., :3], 0, 255), 40, 8)
 near_im = Image.fromarray(np.dstack([near_rgb, near[..., 3]]).astype(np.uint8), "RGBA")
 tile = image(near_im, up=1) + image(near_im, x=-W, up=1)
-# sirena del patrullero encendida: barral rojo/azul en doble destello alternado, con halo
-_hh = PCL * .31 * VS
-_tp = int(_hh * .14)
-bar_y0, bar_y1 = oy0 + (_tp - _hh * .1) / VS, oy0 + (_tp + _hh * .03) / VS
-bar_xr, bar_xm, bar_xb = PCX + PCL * .47, PCX + PCL * .55, PCX + PCL * .63
-defs.append('<radialGradient id="sirR"><stop offset="0" stop-color="#ff3040" stop-opacity=".75"/>'
-            '<stop offset="1" stop-color="#ff3040" stop-opacity="0"/></radialGradient>'
-            '<radialGradient id="sirB"><stop offset="0" stop-color="#3a70ff" stop-opacity=".75"/>'
-            '<stop offset="1" stop-color="#3a70ff" stop-opacity="0"/></radialGradient>')
-css.append("@keyframes sirR{0%,8%{opacity:1}9%,16%{opacity:0}17%,25%{opacity:1}26%,100%{opacity:0}}"
-           "@keyframes sirB{0%,49%{opacity:0}50%,58%{opacity:1}59%,66%{opacity:0}67%,75%{opacity:1}76%,100%{opacity:0}}")
-bh_ = bar_y1 - bar_y0
-siren = (f'<g style="animation:sirR .9s infinite steps(1)">'
-         f'<ellipse cx="{(bar_xr + bar_xm) / 2:.1f}" cy="{bar_y0 + bh_ / 2:.1f}" rx="13" ry="8" fill="url(#sirR)"/>'
-         f'<rect x="{bar_xr:.1f}" y="{bar_y0:.1f}" width="{bar_xm - bar_xr:.1f}" height="{bh_:.1f}" fill="#ffd0d4"/></g>'
-         f'<g style="animation:sirB .9s infinite steps(1)">'
-         f'<ellipse cx="{(bar_xm + bar_xb) / 2:.1f}" cy="{bar_y0 + bh_ / 2:.1f}" rx="13" ry="8" fill="url(#sirB)"/>'
-         f'<rect x="{bar_xm:.1f}" y="{bar_y0:.1f}" width="{bar_xb - bar_xm:.1f}" height="{bh_:.1f}" fill="#d4e0ff"/></g>')
-tile += f'<g style="animation:walkvis {T}s infinite linear">{siren}<g transform="translate({-W} 0)">{siren}</g></g>'
 # fase del tile: al congelar, la senda queda justo debajo de Claude y Lucas (x ≈ 93..185)
 TILE0 = 93 - GX - NEAR_SPEED * F0
 body.append(f'<g style="{track(TILE0, NEAR_SPEED, W, 0, 0)}">{tile}</g>')
@@ -959,7 +925,7 @@ def tile_g(t):                                         # desplazamiento (sin mó
 
 TURN_COL = (196, 150, 40)                              # un taxi amarillo, para que se distinga
 T_IN, T_TURN, T_GONE = 11.6, 14.6, 19.6
-LANE_Y = GROUND - 1                                    # carril cercano (va hacia la derecha)
+LANE_Y = NEAR_LANE                                     # carril cercano (va hacia la derecha)
 X_LANE = WR * .5                                       # carril de ida de la calle transversal
 z_a = F * HC / (LANE_Y - VPY)
 x_turn = VPX + F * X_LANE / z_a                        # en coordenadas del tile
@@ -1044,7 +1010,7 @@ body.append(f'<g style="{track(TILE0, NEAR_SPEED, W, 0, 0)}">{cross_peds}</g>')
 CSPAN, CMARG = W + 320, 160
 LANES = [  # (base y, sentido, k: vueltas por ciclo, vehículos [(tipo, largo)])
     (AVE_TOP + 11, -1, -1, [("sedan", 64), ("bus", 150), ("van", 60), ("sedan", 66)]),
-    (GROUND - 1, 1, 2, [("sedan", 76), ("van", 72), ("sedan", 78), ("sedan", 74)]),
+    (NEAR_LANE, 1, 2, [("sedan", 76), ("van", 72), ("sedan", 78), ("sedan", 74)]),
 ]
 
 
@@ -1083,6 +1049,40 @@ for ly, dirn, k, vehs in LANES:
         spr = (f'<g style="{WALK_VIS}">{image(im, 0, -im.height + 2, up=1)}</g>'
                f'<g opacity="0" style="{FRZ_VIS}">{image(frozen(im), 0, -im.height + 2, up=1)}</g>')
         body.append(f'<g style="{track(x0, v, CSPAN, CMARG, ly)}">{spr}</g>')
+
+# ============================================================ patrullero estacionado contra nuestro cordón
+# Va en el carril de estacionamiento (más cerca que el tránsito y más lejos que la gente de la vereda),
+# en el sentido del carril cercano. El oficial, a escala del auto (~1.75 m contra ~1.45 m), está en la
+# calle frente al auto con un pie apoyado en el paragolpe.
+PCX, PCL = 40, 80                                        # posición en el tile y largo
+PBASE = GROUND                                           # ruedas contra el cordón
+pcar = vehicle_side(PCL, (26, 28, 32), "police").transpose(Image.FLIP_LEFT_RIGHT)   # mira a la derecha
+car_h = PCL * .31                                        # alto de carrocería (sin barral)
+officer = officer_leg_up(round(car_h * 1.75 / 1.45)).transpose(Image.FLIP_LEFT_RIGHT)  # mira al auto
+p_y = PBASE - pcar.height + 2
+o_x = PCX + PCL - int(officer.width * .34)               # su pie cae sobre el paragolpe delantero
+o_y = PBASE - officer.height + 1
+_hh = PCL * .31 * VS
+_tp = int(_hh * .14)
+bar_y0, bar_y1 = p_y + (_tp - _hh * .1) / VS, p_y + (_tp + _hh * .03) / VS
+bar_xb, bar_xm, bar_xr = PCX + PCL * (1 - .63), PCX + PCL * (1 - .55), PCX + PCL * (1 - .47)
+defs.append('<radialGradient id="sirR"><stop offset="0" stop-color="#ff3040" stop-opacity=".75"/>'
+            '<stop offset="1" stop-color="#ff3040" stop-opacity="0"/></radialGradient>'
+            '<radialGradient id="sirB"><stop offset="0" stop-color="#3a70ff" stop-opacity=".75"/>'
+            '<stop offset="1" stop-color="#3a70ff" stop-opacity="0"/></radialGradient>')
+css.append("@keyframes sirR{0%,8%{opacity:1}9%,16%{opacity:0}17%,25%{opacity:1}26%,100%{opacity:0}}"
+           "@keyframes sirB{0%,49%{opacity:0}50%,58%{opacity:1}59%,66%{opacity:0}67%,75%{opacity:1}76%,100%{opacity:0}}")
+bh_ = bar_y1 - bar_y0
+siren = (f'<g style="animation:sirB .9s infinite steps(1)">'
+         f'<ellipse cx="{(bar_xb + bar_xm) / 2:.1f}" cy="{bar_y0 + bh_ / 2:.1f}" rx="15" ry="9" fill="url(#sirB)"/>'
+         f'<rect x="{bar_xb:.1f}" y="{bar_y0:.1f}" width="{bar_xm - bar_xb:.1f}" height="{bh_:.1f}" fill="#d4e0ff"/></g>'
+         f'<g style="animation:sirR .9s infinite steps(1)">'
+         f'<ellipse cx="{(bar_xm + bar_xr) / 2:.1f}" cy="{bar_y0 + bh_ / 2:.1f}" rx="15" ry="9" fill="url(#sirR)"/>'
+         f'<rect x="{bar_xm:.1f}" y="{bar_y0:.1f}" width="{bar_xr - bar_xm:.1f}" height="{bh_:.1f}" fill="#ffd0d4"/></g>')
+patrol = (f'<g style="{WALK_VIS}">{image(pcar, PCX, p_y, up=1)}{image(officer, o_x, o_y, up=1)}{siren}</g>'
+          f'<g opacity="0" style="{FRZ_VIS}">{image(frozen(pcar), PCX, p_y, up=1)}{image(frozen(officer), o_x, o_y, up=1)}</g>')
+patrol += f'<g transform="translate({-W} 0)">{patrol}</g>'
+body.append(f'<g style="{track(TILE0, NEAR_SPEED, W, 0, 0)}">{patrol}</g>')
 
 # ============================================================ multitud (fila de atrás)
 SPAN, MARGIN = W + 60, 30
