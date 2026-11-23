@@ -1196,6 +1196,15 @@ def figure(h, frame, look, pose="walk", phase=None, amp=None):
         limb(d, (kx, ky), (ax_, ay_), 2.2 * lw * u, 1.5 * lw * u, col)         # pantorrilla
         fy_ = ay_ + .6 * u
         tilt = max(0.0, k_ - .3) * .8 * u                               # la punta baja al despegar
+        if look.get("boots"):                                           # caña de la bota sobre la pantorrilla
+            bt = tuple(int(c * shade) for c in shoe)
+            bx_, by_ = kx + (ax_ - kx) * .45, ky + (ay_ - ky) * .45
+            limb(d, (bx_, by_), (ax_, ay_), 2.0 * u, 1.9 * u, bt)
+            d.line([(bx_ - .9 * u, by_), (bx_ + .9 * u, by_)], fill=tuple(min(255, c + 28) for c in bt), width=1)  # borde de la caña
+            if look.get("laces"):
+                for j_ in (.3, .6):
+                    lx_, ly_ = bx_ + (ax_ - bx_) * j_, by_ + (ay_ - by_) * j_
+                    d.point((lx_ - .7 * u, ly_), fill=look["laces"])
         if look.get("heels"):
             d.polygon([(ax_ - 1.3 * u, fy_ - .4 * u + tilt), (ax_ + .3 * u, fy_ - 1.1 * u), (ax_ + .5 * u, fy_ - .3 * u),
                        (ax_ - 1.3 * u, fy_ + tilt)], fill=shoe)
@@ -1204,6 +1213,8 @@ def figure(h, frame, look, pose="walk", phase=None, amp=None):
                       fill=shoe)
             if look.get("sole"):
                 d.line([(ax_ - 1.6 * u, fy_ + tilt - .2 * u), (ax_ + .8 * u, fy_ - .2 * u)], fill=look["sole"], width=max(1, int(.4 * u)))
+            if look.get("boots"):                                       # suela gruesa de bota
+                d.line([(ax_ - 1.7 * u, fy_ + tilt), (ax_ + .9 * u, fy_)], fill=(70, 70, 72), width=max(1, int(.5 * u)))
     stride = abs(ankles[0] - ankles[1]) / 2
     d.rounded_rectangle([cx - 1.8 * u, hip - 1.6 * u, cx + 1.7 * u, hip + 1.3 * u], radius=max(1, int(.8 * u)),
                         fill=pants)                                     # pelvis
@@ -1228,7 +1239,27 @@ def figure(h, frame, look, pose="walk", phase=None, amp=None):
                    (cx - 2.4 * u - (stride * .5 if long_coat else 0), coat_len)], fill=coat)
     if look.get("backpack"):
         d.line([(cx - .9 * u, 4.6 * u), (cx - .3 * u, 8.5 * u)], fill=tuple(int(c * .7) for c in look["backpack"]), width=1)
-    d.polygon([(cx - 1.9 * u, 4.4 * u), (cx - 0.9 * u, 4.4 * u), (cx - 1.4 * u, 7.5 * u)], fill=shirt)   # cuello
+    if look.get("inner"):                                               # tapado abierto: se ve la prenda de abajo
+        inn = look["inner"]
+        d.polygon([(cx - 2.0 * u, 4.4 * u), (cx - .7 * u, 4.4 * u), (cx - .8 * u, 12.2 * u), (cx - 2.2 * u, 12.2 * u)], fill=inn)
+        if look.get("ribbed"):                                          # tejido acanalado del buzo
+            for yy_r in np.arange(5.2, 12, 1.1):
+                d.line([(cx - 2.0 * u, yy_r * u), (cx - .8 * u, yy_r * u)], fill=tuple(int(c * .82) for c in inn), width=1)
+        if look.get("vest_buttons"):
+            for yy_r in (6.4, 8.2, 10.0):
+                d.point((cx - 1.5 * u, yy_r * u), fill=look["vest_buttons"])
+        d.line([(cx - .7 * u, 4.4 * u), (cx - .8 * u, coat_len - .5 * u)],
+               fill=tuple(min(255, int(c * 1.6 + 20)) for c in coat), width=max(1, int(.5 * u)))   # solapa con brillo
+    if look.get("coat_sheen"):                                          # reflejo a lo largo de la espalda
+        d.line([(cx + 1.2 * u, 5.0 * u), (cx + 1.7 * u + stride * .2, coat_len - 1.5 * u)],
+               fill=tuple(min(255, int(c * 1.5 + 18)) for c in coat), width=max(1, int(.5 * u)))
+    if look.get("collar_up"):                                           # cuello alto del tapado
+        d.polygon([(cx - .9 * u, 3.0 * u), (cx + 1.5 * u, 3.0 * u), (cx + 1.7 * u, 4.8 * u), (cx - .8 * u, 4.8 * u)], fill=coat)
+        d.line([(cx - .9 * u, 3.0 * u), (cx - .8 * u, 4.8 * u)], fill=tuple(min(255, int(c * 1.6 + 20)) for c in coat), width=1)
+    if look.get("turtleneck"):
+        d.rectangle([cx - 1.0 * u, 3.8 * u, cx + .5 * u, 4.6 * u], fill=look["turtleneck"])
+    if not look.get("inner"):
+        d.polygon([(cx - 1.9 * u, 4.4 * u), (cx - 0.9 * u, 4.4 * u), (cx - 1.4 * u, 7.5 * u)], fill=shirt)   # cuello
     if look.get("tie"):
         d.line([(cx - 1.5 * u, 5 * u), (cx - 1.7 * u, 8 * u)], fill=look["tie"], width=max(1, int(u * .6)))
     # brazo cercano (opuesto a la pierna cercana); el lejano se dibujó detrás del torso
@@ -1259,6 +1290,7 @@ def figure(h, frame, look, pose="walk", phase=None, amp=None):
         d.rectangle([hx - 2.7 * u, hy - 1.05 * u, hx - .6 * u, hy - .6 * u], fill=tuple(int(c * .7) for c in look["ballcap"]))
     if look.get("shades"):
         d.rectangle([hx - 1.6 * u, hy - .5 * u, hx - .2 * u, hy + .2 * u], fill=look["shades"])
+        d.point((hx - 1.2 * u, hy - .35 * u), fill=(190, 214, 220))                                # reflejo en el vidrio
         d.line([(hx - .2 * u, hy - .4 * u), (hx + 1.2 * u, hy - .5 * u)], fill=look.get("frame", (20, 20, 20)), width=1)
     if look.get("beard"):
         d.rectangle([hx - 1.3 * u, hy + .6 * u, hx + .4 * u, hy + 1.5 * u], fill=look["beard"])
@@ -1305,14 +1337,16 @@ def arm_pose(d, sx, u, alpha, col, skin, width, short_sleeves=False):
     else:
         limb(d, (sx, 5 * u), (ex, ey), width * 1.25, width * 1.05, col)       # brazo
         limb(d, (ex, ey), (hx_, hy_), width * 1.0, width * .85, col)          # antebrazo
-    d.rectangle([hx_ - .7 * u, hy_ - .5 * u, hx_ + .6 * u, hy_ + .8 * u], fill=skin)   # mano (bloque, no '+')
+    d.rectangle([hx_ - .45 * u, hy_ - .3 * u, hx_ + .45 * u, hy_ + .6 * u], fill=skin)  # mano (bloque chico, no '+')
     return hx_, hy_
 
 
 def claude_figure(h, frame, pose="walk", facing_right=False, phase=None, amp=None):
     """Claude como Morpheus: abrigo largo, anteojos negros y cabeza de chispa naranja."""
-    look = dict(coat=(30, 40, 34), shirt=(60, 74, 66), skin=(217, 119, 87), hair=(0, 0, 0, 0),
-                pants=(26, 30, 28), coat_len=21, tie=None)
+    look = dict(coat=(34, 46, 38), shirt=(60, 74, 66), skin=(217, 119, 87), hair=(0, 0, 0, 0),
+                pants=(40, 34, 30), coat_len=21, tie=None,
+                inner=(92, 30, 40), vest_buttons=(200, 170, 90),                  # chaleco bordó
+                coat_sheen=True, boots=True, shoe=(52, 34, 26))                   # tapado de cuero y botas marrones
     base = figure(h, frame, look, pose, phase=phase, amp=amp)
     u = h / 24
     pad = int(1.4 * u)                                   # espacio arriba para las puntas de la chispa
@@ -1331,15 +1365,20 @@ def claude_figure(h, frame, pose="walk", facing_right=False, phase=None, amp=Non
         r = 3.1 * u if a % 2 == 0 else 2.3 * u
         d.line([(hx, hy), (hx + np.cos(ang) * r, hy + np.sin(ang) * r)], fill=orange, width=max(1, int(.9 * u)))
     d.ellipse([hx - 1.2 * u, hy - 1.2 * u, hx + 1.2 * u, hy + 1.2 * u], fill=orange)
-    d.rectangle([hx - 1.8 * u, hy - .55 * u, hx - .1 * u, hy + .15 * u], fill=(8, 10, 10, 255))   # anteojos
-    d.line([(hx - .1 * u, hy - .45 * u), (hx + 1.4 * u, hy - .45 * u)], fill=(8, 10, 10, 255), width=1)
+    d.ellipse([hx - 1.9 * u, hy - .75 * u, hx - .5 * u, hy + .55 * u], fill=(8, 10, 10, 255))     # lentes redondos
+    d.ellipse([hx - 1.1 * u, hy - .55 * u, hx + .1 * u, hy + .45 * u], fill=(14, 16, 16, 255))
+    d.point((hx - 1.5 * u, hy - .4 * u), fill=(150, 160, 160, 255))                               # reflejo
+    d.line([(hx + .1 * u, hy - .2 * u), (hx + 1.4 * u, hy - .4 * u)], fill=(8, 10, 10, 255), width=1)
     if facing_right:
         im = im.transpose(Image.FLIP_LEFT_RIGHT)
     return im
 
 
-LUCAS = dict(coat=(18, 20, 22), shirt=(30, 34, 40), skin=(214, 168, 136), hair=(58, 40, 28), curly=True,
-             shades=(70, 96, 104), frame=(170, 176, 180), beard=(150, 112, 92), pants=(16, 16, 18), coat_len=21)
+LUCAS = dict(coat=(30, 32, 38), shirt=(30, 34, 40), skin=(214, 168, 136), hair=(58, 40, 28), curly=True,
+             shades=(40, 56, 64), frame=(178, 184, 188), beard=(150, 112, 92), pants=(12, 12, 14), coat_len=21,
+             inner=(56, 58, 64), ribbed=True, turtleneck=(56, 58, 64),            # buzo gris oscuro de cuello alto
+             collar_up=True, coat_sheen=True,                                       # tapado negro de cuello parado
+             boots=True, shoe=(14, 14, 16), laces=(80, 80, 84))                     # borcegos negros
 
 
 def frozen(im):
