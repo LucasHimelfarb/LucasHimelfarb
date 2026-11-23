@@ -339,7 +339,9 @@ def facade(u, v, hb, base, aw, det, bid, kind="shop", corner_edge=False, width=N
     cor = (d < 5) & (d >= 0)
     c = np.where(cor[..., None], c * (1 - det) + trim * 1.08 * det, c)
     c = np.where((cor & (d > 1.5) & (d < 2.8) & ((u % 2.4) < 1.1))[..., None], c - 30 * det, c)
-    if kind.startswith("billboard"):
+    if kind == "billboard_led":
+        c = led_frame(c, u, v, det)
+    elif kind.startswith("billboard"):
         design = {"billboard_soda": 0, "billboard_lime": 1, "billboard_fashion": 2}.get(kind, hsh % 3)
         c = billboard(c, u, v, det, design, width)
     elif kind == "grand":
@@ -347,6 +349,21 @@ def facade(u, v, hb, base, aw, det, bid, kind="shop", corner_edge=False, width=N
     if corner_edge:
         c = np.where((u < 1.2)[..., None], c + 14, c)   # arista de la esquina
     return np.clip(c, 0, 255)
+
+
+LED_U0, LED_U1, LED_V0, LED_V1 = 4, 60, 36, 58       # pantalla LED (en la cara del edificio)
+
+
+def led_frame(c, u, v, det):
+    """Marco metálico, soportes y fondo apagado de la pantalla LED."""
+    fr = (u >= LED_U0 - 2) & (u < LED_U1 + 2) & (v >= LED_V0 - 2) & (v < LED_V1 + 2)
+    c = np.where(fr[..., None], c * (1 - det) + np.array([52, 54, 58]) * det, c)
+    edge = fr & ((u < LED_U0 - 1.2) | (v >= LED_V1 + 1.2))
+    c = np.where(edge[..., None], c * (1 - det) + np.array([120, 124, 128]) * det, c)
+    inner = (u >= LED_U0) & (u < LED_U1) & (v >= LED_V0) & (v < LED_V1)
+    c = np.where(inner[..., None], c * (1 - det) + np.array([16, 16, 18]) * det, c)
+    brk = (v >= LED_V0 - 6) & (v < LED_V0 - 2) & ((np.abs(u - (LED_U0 + 8)) < 1) | (np.abs(u - (LED_U1 - 8)) < 1))
+    return np.where(brk[..., None], c * (1 - det) + np.array([40, 42, 44]) * det, c)
 
 
 def billboard(c, u, v, det, design, width):
@@ -605,7 +622,7 @@ near = np.zeros((H, TW, 4))
 AVE_TOP = 74                                                          # base de los edificios (vereda de enfrente)
 x = 0
 # piedra caliza clara, como los monumentos de Washington DC
-KIND_OVERRIDE = {0: "grand", 1: "billboard_soda", 5: "grand", 7: "billboard_lime"}   # índices de edificios de frente
+KIND_OVERRIDE = {0: "grand", 1: "billboard_led", 5: "grand", 7: "billboard_lime"}   # índices de edificios de frente
 FRONT_PAL = [(206, 204, 196), (196, 196, 190), (216, 213, 204), (188, 190, 184), (224, 221, 212), (200, 198, 188)]
 AWN = [(52, 104, 74), (128, 120, 92), (70, 80, 76), (120, 60, 56)]
 blds = []                                                             # (x, ancho, techo, color, toldo, tipo)
@@ -988,6 +1005,107 @@ band_im = Image.fromarray(near_full[GROUND:], "RGBA")
 # fase del tile: al congelar, la senda queda justo debajo de Claude y Lucas (x ≈ 93..185)
 TILE0 = 93 - GX - NEAR_SPEED * F0
 body.append(f'<g style="{track(TILE0, NEAR_SPEED, TW, 0, 0)}">{tile}</g>')
+
+# Pantalla LED de Coca-Cola (como las de Times Square): contenido animado en su propia capa
+COKE_RED, WHITE_ = (230, 16, 34), (250, 250, 246)
+SCRIPT = {   # letras cursivas en píxeles (alto de mayúscula 9, minúsculas 5)
+    "C": ["..xxxx.", ".x....x", "x......", "x......", "x......", "x......", "x......", ".x....x", "..xxxx."],
+    "o": [".xxx.", "x...x", "x...x", "x...x", ".xxx."], "c": [".xxx", "x...", "x...", "x...", ".xxx"],
+    "a": [".xxx.", "x...x", "x...x", "x..xx", ".xx.x"],
+    "l": ["x.", "x.", "x.", "x.", "x.", "x.", "x.", "x.", ".x"], "-": ["xxx"],
+}
+
+
+def wordmark(im, x0, base, col):
+    d_ = ImageDraw.Draw(im)
+    x = x0
+    for ch in "Coca-Cola":
+        g = SCRIPT[ch]
+        y0 = base - len(g) + 1 if ch != "-" else base - 2
+        for yy_, row in enumerate(g):
+            for xx_, b in enumerate(row):
+                if b == "x":
+                    d_.point((x + xx_, y0 + yy_), fill=col)
+        x += len(g[0]) + 1
+    d_.line([(x0 + 2, base + 2), (x - 6, base + 2)], fill=col)   # subrayado con floritura
+    d_.point((x - 5, base + 1), fill=col)
+
+
+def ribbon(d_, wid, y_mid, col, amp=2.5, ph=0.0, th=2):
+    for x in range(wid):
+        y = y_mid + amp * np.sin(x / wid * 2 * np.pi * .9 + ph)
+        d_.line([(x, y - th / 2), (x, y + th / 2)], fill=col)
+
+
+def coke_frame(k):
+    w_, h_ = LED_U1 - LED_U0, LED_V1 - LED_V0
+    im = Image.new("RGB", (w_, h_), COKE_RED); d_ = ImageDraw.Draw(im)
+    if k == 0:                                            # marca + cinta blanca
+        wordmark(im, 2, 10, WHITE_)
+        ribbon(d_, w_, 16.5, WHITE_)
+    elif k in (1, 2):                                     # botella contorneada, burbujas y hielo
+        ribbon(d_, w_, 19, WHITE_, amp=1.5, ph=1.5)       # la cinta va detrás de la botella
+        bxc = 11                                          # centro de la botella
+        widths = [3, 3, 3, 3, 3, 4, 5, 6, 7, 7, 6, 5, 5, 5, 6, 7, 7, 7, 7, 6, 6]     # silueta contorneada, fila por fila
+        for yy_, wd in enumerate(widths):
+            x0_ = bxc - wd // 2
+            d_.line([(x0_, yy_ + 1), (x0_ + wd - 1, yy_ + 1)], fill=(64, 28, 22))
+            d_.point((x0_, yy_ + 1), fill=(150, 96, 76))                             # brillo del vidrio
+        d_.rectangle([bxc - 1, 0, bxc + 1, 1], fill=(206, 206, 210))                 # tapita
+        d_.line([(bxc + 1, 8), (bxc + 2, 10)], fill=(220, 180, 170))                 # reflejo del vidrio
+        d_.line([(bxc + 2, 15), (bxc + 2, 18)], fill=(200, 150, 140))
+        for ix, iy in [(22, 13), (28, 15), (25, 9)]:                                 # hielo
+            d_.rectangle([ix, iy, ix + 4, iy + 4], fill=(196, 228, 240))
+            d_.line([(ix, iy), (ix + 4, iy)], fill=(250, 255, 255))
+            d_.point((ix + 1, iy + 2), fill=(250, 255, 255))
+        rb = random.Random(3)
+        for _ in range(12):                                                         # burbujas que suben
+            bxx, byy = rb.randrange(18, 54), rb.randrange(0, 18)
+            d_.point((bxx, (byy - (k - 1) * 4) % 18), fill=(255, 196, 200))
+    else:                                                 # invertido: rojo sobre blanco
+        d_.rectangle([0, 0, w_, h_], fill=WHITE_)
+        wordmark(im, 2, 10, COKE_RED)
+        ribbon(d_, w_, 16.5, COKE_RED)
+    return im
+
+
+def led(img):
+    """Cada píxel como un LED: punto brillante con separación oscura (dibujado a 4x)."""
+    a = np.asarray(img, dtype=float)
+    big = np.repeat(np.repeat(a, 4, 0), 4, 1)
+    mask = np.zeros((4, 4)); mask[:3, :3] = 1; mask[0, 0] = mask[0, 2] = mask[2, 0] = mask[2, 2] = .8
+    m = np.tile(mask, (a.shape[0], a.shape[1]))[..., None]
+    out = big * (.3 + .8 * m)
+    return Image.fromarray(np.clip(out, 0, 255).astype(np.uint8), "RGB")
+
+
+led_b = next(b for i_, b in enumerate(blds) if i_ == 1)
+lx0, ly0 = led_b[0] + LED_U0, AVE_TOP - LED_V1
+lw, lh = LED_U1 - LED_U0, LED_V1 - LED_V0
+frames_led = [led(coke_frame(k)) for k in range(4)]
+uri = lambda im_: png_uri(im_)
+LCYC = 7.5
+sched = [(0, 0, 2.5), (1, 2.5, 3.75), (2, 3.75, 5.0), (3, 5.0, 7.5)]     # (cuadro, desde, hasta)
+led_imgs = []
+for k, t0, t1 in sched:
+    kk = nid("led")
+    a0, a1 = t0 / LCYC * 100, t1 / LCYC * 100
+    css.append(f"@keyframes {kk}{{0%,{max(a0 - .01, 0):.2f}%{{opacity:{1 if k == 0 else 0}}}{a0:.2f}%{{opacity:1}}"
+               f"{a0 + 1.2:.2f}%{{opacity:.55}}{a0 + 2.4:.2f}%,{a1 - .01:.2f}%{{opacity:1}}{a1:.2f}%,100%{{opacity:0}}}}"
+               if k else f"@keyframes {kk}{{0%,{a1 - .01:.2f}%{{opacity:1}}{a1:.2f}%,100%{{opacity:0}}}}")
+    led_imgs.append(f'<image x="{lx0}" y="{ly0}" width="{lw}" height="{lh}" preserveAspectRatio="none" '
+                    f'href="{uri(frames_led[k])}" style="animation:{kk} {LCYC}s infinite steps(1)"/>')
+css.append("@keyframes ledscan{0%{transform:translateY(0)}100%{transform:translateY(22px)}}")
+scan = (f'<clipPath id="ledclip"><rect x="{lx0}" y="{ly0}" width="{lw}" height="{lh}"/></clipPath>')
+defs.append(scan)
+glow = (f'<ellipse cx="{lx0 + lw / 2}" cy="{ly0 + lh / 2}" rx="{lw * .75}" ry="{lh * 1.1}" fill="#ff2030" opacity=".10"/>')
+led_layer = (f'<g style="animation:walkvis {T}s infinite linear">{glow}{"".join(led_imgs)}'
+             f'<g clip-path="url(#ledclip)"><rect x="{lx0}" y="{ly0 - 3}" width="{lw}" height="2" fill="#fff" opacity=".10" '
+             f'style="animation:ledscan 2.2s infinite linear"/></g></g>'
+             f'<g opacity="0" style="animation:frzvis {T}s infinite linear"><image x="{lx0}" y="{ly0}" width="{lw}" height="{lh}" preserveAspectRatio="none" '
+             f'href="{uri(frames_led[0])}"/></g>')
+led_layer = "".join(f'<g transform="translate({off} 0)">{led_layer}</g>' for off in (0, -TW))
+body.append(f'<g style="{track(TILE0, NEAR_SPEED, TW, 0, 0)}">{led_layer}</g>')
 
 # Vereda con perspectiva: cada fila del suelo se escala por f(y) = (y - horizonte) / (cordón - horizonte)
 # alrededor del centro de la pantalla y se desplaza f(y) veces más rápido (paralaje). Así las juntas y
