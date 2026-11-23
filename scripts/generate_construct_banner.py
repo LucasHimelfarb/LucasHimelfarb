@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Genera assets/lucas-himelfarb-construct.svg: segundo banner del perfil.
 
-Guiño a la escena del programa de entrenamiento: Claude (Morpheus) camina adelante
+Guiño a la escena del programa de entrenamiento: Claude (un mentor canoso de anteojos ámbar,
+con la chispa de Claude en la solapa) camina adelante
 y Lucas (Neo) lo sigue entre la multitud. Aparece de repente
 una mujer de vestido rojo, Lucas se da vuelta a mirarla y ella se convierte en un
 agente; después la calle se congela en código verde.
@@ -1711,7 +1712,11 @@ def head_patch(u, look, hx, hy, phase=0.0, facing=1, traits=None):
         box = (X > -1.62) & (X < -.82) & (Y > ey - .36) & (Y < ey + .3)
         inner = (X > -1.62 + 1 / u) & (X < -.82 - 1 / u) & (Y > ey - .36 + 1 / u) & (Y < ey + .3 - 1 / u)
         paint(box & ~inner, gc)
-        paint(inner & (Y < ey - .1), _mix(skin, (220, 236, 244), .45))
+        if look.get("lens_tint"):                                                   # cristales tintados
+            paint(inner, _mix(skin, look["lens_tint"], .62))
+            paint(inner & (Y < ey - .12), _mix(look["lens_tint"], (255, 236, 210), .45))   # reflejo arriba
+        else:
+            paint(inner & (Y < ey - .1), _mix(skin, (220, 236, 244), .45))
         run(-.82, .32, ey - .26, gc)
     # gorras
     if look.get("ballcap"):
@@ -2714,8 +2719,8 @@ HERO_STYLE = {
                 hair=(56, 38, 26), hair_hi=(92, 66, 46), flare=.05, hem=.92, collar="mao", buttons=False,
                 lean=.075, arm=.5),                                   # decidido: inclinado hacia adelante
     "morpheus": dict(coat=(18, 22, 20), coat_hi=(88, 104, 96), inner=(96, 30, 42), inner_hi=(140, 52, 64),
-                     pants=(34, 30, 28), boot=(54, 36, 26), boot_hi=(100, 72, 54), skin=(217, 119, 87),
-                     skin_sh=(176, 88, 62), hair=None, hair_hi=None, flare=.08, hem=.93, collar="lapel", buttons=True,
+                     pants=(34, 30, 28), boot=(54, 36, 26), boot_hi=(100, 72, 54), skin=(198, 142, 108),
+                     skin_sh=(160, 108, 80), hair=None, hair_hi=None, flare=.08, hem=.93, collar="lapel", buttons=True,
                      lean=.02, arm=.28),                              # erguido y solemne
 }
 
@@ -2759,34 +2764,35 @@ def claude_spark(size=13):
 LUCAS_HEAD = dict(skin=(212, 166, 134), hair=(52, 34, 22), hair_style="curly_big", shades=(28, 44, 56),
                   frame=(186, 192, 196), frame_full=True, beard=(92, 64, 46), stubble=True)
 LUCAS_TRAITS = dict(nose=1.22, chin=.05, brow=2, glasses=None, style="curly_big", mustache=False, iris=(46, 30, 22))
+CLAUDE_HEAD = dict(skin=(198, 142, 108), hair=(176, 172, 166), hair_style="side", beard=(166, 162, 156),
+                   lens_tint=(217, 119, 87))
+CLAUDE_TRAITS = dict(nose=1.08, chin=.07, brow=2, glasses=(46, 38, 34), style="side", mustache=False, iris=(46, 30, 22))
 
 
 def stamp_head(im, kind, neck_x, neck_y, collar_y):
     """Cabeza de los protagonistas, a S x. neck_*: base del cuello; collar_y: borde de arriba del cuello del tapado."""
-    if kind == "morpheus":                                   # cara de Claude: el logo, con lentes redondos
-        sz = 13 * S
-        sp = claude_spark(sz)
-        x0, y0 = int(round(neck_x - sp.width / 2 - .5 * S)), int(round(neck_y - sp.height - 1 * S))
-        d_ = ImageDraw.Draw(sp)
-        g = sz / 13                                          # unidad de la grilla original de 13 px
-        for cxl in (4.0, 7.0):                               # quevedos ovalados, oscuros, con un brillo
-            d_.ellipse([(cxl - 1.05) * g, (6.0 - .95) * g, (cxl + 1.05) * g, (6.0 + .95) * g], fill=(12, 14, 14, 255))
-            d_.ellipse([(cxl - .55) * g, (6.0 - .2) * g, (cxl + .95) * g, (6.0 + .9) * g], fill=(40, 44, 46, 255))
-            d_.ellipse([(cxl - 1.05) * g, (6.0 - .95) * g, (cxl + .9) * g, (6.0 + .75) * g], fill=(14, 16, 16, 255))
-            d_.ellipse([(cxl - .75) * g, (6.0 - .7) * g, (cxl - .2) * g, (6.0 - .2) * g], fill=(150, 162, 162, 255))
-        d_.line([(5.0 * g, 5.75 * g), (6.0 * g, 5.75 * g)], fill=(12, 14, 14, 255), width=max(1, int(g * .45)))   # puente
-        d_.line([(8.0 * g, 5.8 * g), (10.4 * g, 5.5 * g)], fill=(12, 14, 14, 255), width=max(1, int(g * .35)))    # patilla
-        paste_patch(im, sp, x0, y0)
-        d = ImageDraw.Draw(im)                                                                    # cuello
-        d.rectangle([neck_x - .6 * S, neck_y - 1.8 * S, neck_x + .6 * S, min(neck_y, collar_y + .6 * S)], fill=(160, 78, 56))
-        return
-    # Lucas: cara de perfil a buena resolución (rulos, anteojos rectangulares plateados, barba de días)
+    if kind == "morpheus":                                   # Claude: mentor canoso, barba prolija, anteojos ámbar
+        look_, traits_ = CLAUDE_HEAD, CLAUDE_TRAITS
+    else:                                                    # Lucas: rulos, anteojos rectangulares plateados, barba de días
+        look_, traits_ = LUCAS_HEAD, LUCAS_TRAITS
     u_h = 2.03 * S
-    hx, hy = neck_x - .1 * u_h, neck_y - 2.4 * u_h
+    hx, hy = neck_x - .1 * u_h, neck_y - (1.95 if kind == "morpheus" else 2.4) * u_h   # el tapado de solapas deja ver menos cuello
     d = ImageDraw.Draw(im)
-    d.rectangle([hx - .45 * u_h, hy + 1.0 * u_h, hx + .62 * u_h, collar_y + .5 * S], fill=_sh(LUCAS_HEAD["skin"], .8))   # cuello
-    patch, px0, py0 = head_patch(u_h, LUCAS_HEAD, hx, hy, traits=LUCAS_TRAITS)
+    d.rectangle([hx - .45 * u_h, hy + 1.0 * u_h, hx + .62 * u_h, collar_y + .5 * S], fill=_sh(look_["skin"], .8))   # cuello
+    patch, px0, py0 = head_patch(u_h, look_, hx, hy, traits=traits_)
     paste_patch(im, patch, px0, py0)
+
+
+def claude_pin(d, cx_, cy_, r_):
+    """Prendedor con la chispa de Claude (8 rayos en cuña), para la solapa del tapado."""
+    for i_ in range(8):
+        ang = i_ * np.pi / 4 + .13
+        ln = 1.0 if i_ % 2 == 0 else .82
+        tip = (cx_ + np.cos(ang) * r_ * ln, cy_ + np.sin(ang) * r_ * ln)
+        b1 = (cx_ + np.cos(ang + .6) * r_ * .28, cy_ + np.sin(ang + .6) * r_ * .28)
+        b2 = (cx_ + np.cos(ang - .6) * r_ * .28, cy_ + np.sin(ang - .6) * r_ * .28)
+        d.polygon([b1, tip, b2], fill=(217, 119, 87))
+    d.ellipse([cx_ - r_ * .3, cy_ - r_ * .3, cx_ + r_ * .3, cy_ + r_ * .3], fill=(240, 150, 114))
 
 
 def hero(kind, H_, phase=0.0, amp=.36, facing_right=False, arms_back=0.0):
@@ -2909,6 +2915,8 @@ def hero(kind, H_, phase=0.0, amp=.36, facing_right=False, arms_back=0.0):
     else:
         _poly(d, [(XL(-.04, .16), Yd(.16)), (XL(.05, .15), Yd(.15)), (XL(.06, .2), Yd(.2)), (XL(-.06, .24), Yd(.24))],
               dark(coat, 1.15))
+    if kind == "morpheus":                                                            # la chispa de Claude en la solapa
+        claude_pin(d, XL(-.02, .225), Yd(.225), .026 * Hs)
     neck_x, neck_y = XL(-.01, .165) / S_, Yd(.165) / S_                   # base del cuello (en píxeles finales)
     collar_y = Yd(.12 if st["collar"] == "mao" else .15) / S_
     out = _finish(img, int(Wc / S_), int(img.height / S_)).copy()
