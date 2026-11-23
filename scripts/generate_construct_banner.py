@@ -1999,12 +1999,12 @@ PH = round(PERSP_K * (FEET - HORIZON))                  # misma regla que el res
 
 # ============================================================ protagonistas (diseño propio, a 4x)
 HERO_STYLE = {
-    "neo": dict(coat=(24, 24, 28), coat_hi=(78, 80, 90), inner=(40, 40, 46), inner_hi=(60, 60, 68), pants=(16, 16, 18),
+    "neo": dict(coat=(16, 16, 19), coat_hi=(96, 98, 110), inner=(40, 40, 46), inner_hi=(60, 60, 68), pants=(16, 16, 18),
                 boot=(14, 14, 16), boot_hi=(60, 60, 66), skin=(212, 166, 134), skin_sh=(170, 124, 98),
-                hair=(56, 38, 26), hair_hi=(92, 66, 46), flare=.02, hem=.76, collar="mao", buttons=False),
-    "morpheus": dict(coat=(30, 40, 33), coat_hi=(76, 96, 80), inner=(96, 30, 42), inner_hi=(140, 52, 64),
+                hair=(56, 38, 26), hair_hi=(92, 66, 46), flare=.05, hem=.92, collar="mao", buttons=False),
+    "morpheus": dict(coat=(18, 22, 20), coat_hi=(88, 104, 96), inner=(96, 30, 42), inner_hi=(140, 52, 64),
                      pants=(34, 30, 28), boot=(54, 36, 26), boot_hi=(100, 72, 54), skin=(217, 119, 87),
-                     skin_sh=(176, 88, 62), hair=None, hair_hi=None, flare=.05, hem=.80, collar="lapel", buttons=True),
+                     skin_sh=(176, 88, 62), hair=None, hair_hi=None, flare=.08, hem=.93, collar="lapel", buttons=True),
 }
 
 
@@ -2044,7 +2044,51 @@ HEADS = {
 }
 
 
+def claude_spark(size=13):
+    """Asterisco tipo logo de Claude: rayos en cuña que se afinan, largos levemente desparejos."""
+    S8 = 8
+    R = size * S8 / 2
+    big = Image.new("L", (size * S8, size * S8), 0); d8 = ImageDraw.Draw(big)
+    c8 = size * S8 / 2
+    rays = [1.0, .84, .96, .8, 1.0, .88, .93, .82]           # 8 rayos gruesos: se leen a 13 px
+    for i_, ln in enumerate(rays):
+        ang = i_ * 2 * np.pi / len(rays) + .13
+        tip = (c8 + np.cos(ang) * R * ln, c8 + np.sin(ang) * R * ln)
+        side = .6
+        b1 = (c8 + np.cos(ang + side) * R * .25, c8 + np.sin(ang + side) * R * .25)
+        b2 = (c8 + np.cos(ang - side) * R * .25, c8 + np.sin(ang - side) * R * .25)
+        d8.polygon([b1, tip, b2], fill=255)
+    d8.ellipse([c8 - R * .22, c8 - R * .22, c8 + R * .22, c8 + R * .22], fill=255)
+    a = np.asarray(big.resize((size, size), Image.BOX), dtype=float) / 255
+    out = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+    px_ = out.load()
+    yy_, xx_ = np.mgrid[0:size, 0:size]
+    rr_ = np.hypot(xx_ - (size - 1) / 2, yy_ - (size - 1) / 2)
+    for y_ in range(size):
+        for x_ in range(size):
+            if a[y_, x_] > .3:
+                col = (240, 150, 114) if rr_[y_, x_] < size * .14 else ((217, 119, 87) if a[y_, x_] > .55 else (196, 102, 74))
+                px_[x_, y_] = col + (255,)
+    return out
+
+
 def stamp_head(im, kind, neck_x, neck_y):
+    if kind == "morpheus":                                   # cara de Claude: el logo, con lentes redondos
+        sp = claude_spark(13)
+        x0, y0 = int(round(neck_x - sp.width / 2 - .5)), int(round(neck_y - sp.height - 1))
+        px_ = im.load()
+        K_, k_ = (12, 14, 14, 255), (44, 48, 48, 255)
+        for (xx_, yy_), col in (((3, 5), K_), ((4, 5), K_), ((3, 6), K_), ((4, 6), k_), ((5, 6), (90, 94, 94, 255)),
+                                ((6, 5), K_), ((7, 5), K_), ((6, 6), K_), ((7, 6), k_), ((8, 6), (90, 94, 94, 255))):
+            sp.putpixel((xx_, yy_), col)
+        sp.putpixel((3, 5), (150, 160, 160, 255))                                                # reflejo
+        im.alpha_composite(sp, (max(0, x0), max(0, y0)))
+        for yy_ in range(2):                                                                     # cuello
+            for xx_ in range(-1, 1):
+                X_, Y_ = int(round(neck_x)) + xx_, int(round(neck_y)) - yy_
+                if 0 <= X_ < im.width and 0 <= Y_ < im.height:
+                    px_[X_, Y_] = (176, 88, 62, 255)
+        return
     rows, pal = HEADS[kind]
     px_ = im.load()
     h_, w_ = len(rows), len(rows[0])
@@ -2108,9 +2152,17 @@ def hero(kind, H_, phase=0.0, amp=.36, facing_right=False):
         u_ = (hem_y - ky) / max(1e-6, ay - ky)
         hx_ = kx + (ax - kx) * float(np.clip(u_, 0, 1)) if hem_y > ky else cx - (hem_y - hip_y) * np.tan(t)
         fl = st["flare"] * Hs
-        poly = [(X(-.085), Yd(.43)), (X(.085), Yd(.43)), (hx_ + .07 * Hs + fl, hem_y), (hx_ - .075 * Hs - fl * .6, hem_y + .01 * Hs)]
+        trail = (.05 + .04 * (1 - np.cos(t))) * Hs                                   # la capa se arrastra hacia atrás
+        poly = [(X(-.085), Yd(.43)), (X(.085), Yd(.43)), (hx_ + .07 * Hs + fl + trail, hem_y - .01 * Hs),
+                (hx_ - .07 * Hs - fl * .5, hem_y + .01 * Hs)]
         _poly(d, poly, col)
         d.line([poly[3], poly[0]], fill=hi, width=max(1, int(.012 * Hs)))          # canto iluminado
+        for f_ in (.35, .62):                                                         # reflejos del cuero
+            p0_ = (poly[0][0] + (poly[1][0] - poly[0][0]) * f_, poly[0][1])
+            p1_ = (poly[3][0] + (poly[2][0] - poly[3][0]) * f_, poly[3][1])
+            d.line([(p0_[0] + (p1_[0] - p0_[0]) * .15, p0_[1] + (p1_[1] - p0_[1]) * .15),
+                    (p0_[0] + (p1_[0] - p0_[0]) * .7, p0_[1] + (p1_[1] - p0_[1]) * .7)],
+                   fill=dark(hi, .62), width=max(1, int(.01 * Hs)))
         d.line([(hx_ - .07 * Hs - fl * .6, hem_y + .005 * Hs), (hx_ + .065 * Hs + fl, hem_y)], fill=dark(col, .75),
                width=max(1, int(.01 * Hs)))                                         # dobladillo
 
@@ -2137,6 +2189,7 @@ def hero(kind, H_, phase=0.0, amp=.36, facing_right=False):
              (X(-.085), Yd(.45)), (X(-.1), Yd(.3)), (X(-.09), Yd(.22))]
     _poly(d, torso, coat)
     d.line([(X(.075), Yd(.2)), (X(.075), Yd(.44))], fill=dark(coat, .7), width=max(1, int(.016 * Hs)))    # sombra de espalda
+    d.line([(X(.035), Yd(.2)), (X(.045), Yd(.42))], fill=dark(coat_hi, .55), width=max(1, int(.01 * Hs)))  # reflejo del cuero
     # prenda interior que se ve por la abertura del tapado
     inner = [(X(-.07), Yd(.17)), (X(-.03), Yd(.17)), (X(-.045), Yd(.44)), (X(-.085), Yd(.44)), (X(-.095), Yd(.28))]
     _poly(d, inner, st["inner"])
@@ -2155,7 +2208,6 @@ def hero(kind, H_, phase=0.0, amp=.36, facing_right=False):
             for xx in (-.02, .015):
                 d.ellipse([X(xx) - .007 * Hs, Yd(yy) - .007 * Hs, X(xx) + .007 * Hs, Yd(yy) + .007 * Hs], fill=(14, 18, 16))
     flap(0, coat, coat_hi)
-    d.line([(X(-.085), Yd(.44)), (X(.08), Yd(.44))], fill=dark(coat, .6), width=max(1, int(.012 * Hs)))   # cintura
     arm(a_near, tuple(min(255, int(v * 1.15 + 6)) for v in coat), coat_hi, st["skin"])
     # cuello del tapado
     if st["collar"] == "mao":
