@@ -195,6 +195,7 @@ def track(x0, v, span, margin, y):
 
 # ============================================================ fondo: ciudad del constructo (de día, verdosa)
 yy, xx = np.mgrid[0:H, 0:W]
+PERSP_K, HORIZON = .67, 46                               # alto de una persona = PERSP_K * (pies - HORIZON)
 GROUND = 96                                              # nuestra vereda (la avenida suma un carril de estacionamiento)
 NEAR_LANE = 91                                           # base del carril de circulación cercano
 sky = ramp(yy / H, [(0, (150, 172, 150)), (.5, (196, 210, 186)), (1, (210, 218, 196))])
@@ -630,7 +631,7 @@ reg[cm, :3] = corr[cm, :3]; reg[cm, 3] = 255
 srng = np.random.default_rng(1212)
 sr = random.Random(1212)
 near[GROUND:, :, 3] = 255
-SW_ROWS = [GROUND + 3, GROUND + 9, GROUND + 18, H]                     # filas de losas (más altas cerca)
+SW_ROWS = [GROUND + 3, GROUND + 11, GROUND + 21, H]                    # filas de losas de igual profundidad (en perspectiva)
 SLAB = 30                                                               # ancho de losa (~1.5 m)
 grain = srng.normal(0, 1, (H, W))
 SW_OFF = 7                                                              # juntas alineadas: grilla, no ladrillo
@@ -739,15 +740,13 @@ for y_ in range(AVE_TOP + 4, H):
         curb = (aX > WR) & (aX <= WR + max(.8, 1.2 / f_))
         near[y_, curb, :3] = (200, 202, 196)
 # hidrante junto al cordón (después de las sendas: queda por delante)
-HX, HB = GX - 30, GROUND + 6
+HX, HB = GX - 30, GROUND + 3                             # pegado al cordón
 hyd = Image.new("RGBA", (9, 14), (0, 0, 0, 0)); hd = ImageDraw.Draw(hyd)
 hd.rectangle([2, 4, 6, 12], fill=(176, 40, 40)); hd.rectangle([1, 12, 7, 13], fill=(140, 30, 30))
 hd.ellipse([2, 1, 6, 5], fill=(190, 48, 48)); hd.rectangle([3, 0, 5, 1], fill=(150, 34, 34))
 hd.rectangle([0, 6, 8, 7], fill=(160, 36, 36)); hd.point((4, 3), fill=(230, 120, 110))
 hd.rectangle([2, 5, 2, 11], fill=(214, 90, 84))
-ha = np.asarray(hyd, dtype=float); hm = ha[..., 3] > 0
-ys_h, xs_h = np.nonzero(hm)
-near[HB - 14 + ys_h, HX + xs_h, :3] = ha[ys_h, xs_h, :3]
+# (va en su propia capa, ordenada por profundidad; ver más abajo)
 for _ in range(3):                                                      # postes / farolas
     px = random.choice([random.randrange(10, GX - 12), random.randrange(GX + GW + 8, W - 10)])
     near[30:GROUND + 2, px:px + 2, :3] = (40, 48, 44); near[30:GROUND + 2, px:px + 2, 3] = 255
@@ -1256,19 +1255,28 @@ scene = (f'<g style="{WALK_VIS}">{image(pcar, PCX, p_y, up=1)}{image(vcar, VCX, 
 patrol = "".join(f'<g transform="translate({off} 0)">{scene}</g>' for off in (0, -W, -2 * W))
 body.append(f'<g style="{track(TILE0, NEAR_SPEED, W, 0, 0)}">{patrol}</g>')
 
+# ============================================================ hidrante (capa propia)
+# Por delante de los autos y sus sombras, por detrás de la gente de la vereda (pies más abajo).
+hyd_svg = (f'<g style="{WALK_VIS}">{image(hyd, HX, HB - 14, up=1)}</g>'
+           f'<g opacity="0" style="{FRZ_VIS}">{image(frozen(hyd), HX, HB - 14, up=1)}</g>')
+hyd_svg = "".join(f'<g transform="translate({off} 0)">{hyd_svg}</g>' for off in (0, -W))
+body.append(f'<g style="{track(TILE0, NEAR_SPEED, W, 0, 0)}">{hyd_svg}</g>')
+
 # ============================================================ multitud (fila de atrás)
+CROWD_Y = 102
 SPAN, MARGIN = W + 60, 30
 crowd_back = []
 for i in range(11):
     kind = KINDS[i % len(KINDS)]
     look = crowd_look(kind, random)
     h = random.randint(33, 37) if look.get("female") else random.randint(36, 40)
+    h = round(PERSP_K * (CROWD_Y - HORIZON) * h / 38)         # escala de la regla de perspectiva
     k = random.choice([-1, 1, 1, 2, 2, 3])
     v = k * SPAN / WALK
     flip = k > 0                                   # los que van a la derecha miran a la derecha
     fr = [figure(h, 0, look), figure(h, 1, look)]
     s = sprite_group(fr, 0, -h, step=random.choice([.45, .5, .55]), freeze_img=frozen(fr[0]), flip=flip)
-    crowd_back.append(f'<g style="{track(i * SPAN / 11 + random.uniform(-8, 8), v, SPAN, MARGIN, 102)}">{s}</g>')
+    crowd_back.append(f'<g style="{track(i * SPAN / 11 + random.uniform(-8, 8), v, SPAN, MARGIN, CROWD_Y)}">{s}</g>')
 body.extend(crowd_back)
 
 # ============================================================ la mujer del vestido rojo (y el agente)
@@ -1328,8 +1336,8 @@ def woman_in_red(h, frame):
 
 AGENT = dict(coat=(36, 40, 40), shirt=(226, 230, 222), skin=(214, 172, 140), hair=(28, 24, 20), tie=(8, 8, 8),
              shades=(6, 6, 8), earpiece=(200, 200, 190), pants=(30, 32, 34), coat_len=13.5)
-WH, APPEAR, TURN = 50, 13.0, 18.6
-WY = 110                                            # carril medio: entre la multitud y los protagonistas
+WY = 110
+WH, APPEAR, TURN = round(PERSP_K * (WY - HORIZON)), 13.0, 18.6                                            # carril medio: entre la multitud y los protagonistas
 wred = [woman_in_red(WH, 0), woman_in_red(WH, 1)]
 wagt = [figure(WH, 0, AGENT), figure(WH, 1, AGENT)]
 # aparece de golpe (con un parpadeo) y cruza; al "mirá de nuevo" se vuelve agente
@@ -1350,8 +1358,8 @@ css.append(f"@keyframes {kw}{{0%,{pct(APPEAR):.3f}%{{transform:translate({WX0}px
 body.append(f'<g style="transform:translate({WX0}px,{WY}px);animation:{kw} {T}s infinite linear">{w_red}{w_agt}</g>')
 
 # ============================================================ protagonistas
-PH = 64
 FEET = 118
+PH = round(PERSP_K * (FEET - HORIZON))                  # misma regla que el resto de la gente
 
 
 def protagonist(frames, idle, ox, bob_delay=0):
@@ -1367,10 +1375,10 @@ cl = [claude_figure(PH, 0), claude_figure(PH, 1)]
 cl_idle = claude_figure(PH, 0, pose="idle", facing_right=True)
 lu = [figure(PH, 0, LUCAS), figure(PH, 1, LUCAS)]
 lu_idle = figure(PH, 0, LUCAS, pose="idle")
-CLX, LUX = 92, 150
+CLX, LUX = 98, 146
 # sombras
 for x_ in (CLX, LUX):
-    body.append(f'<ellipse cx="{x_ + cl[0].width / 2}" cy="{FEET}" rx="10" ry="2" fill="#000" opacity=".22"/>')
+    body.append(f'<ellipse cx="{x_ + cl[0].width / 2}" cy="{FEET}" rx="8" ry="1.6" fill="#000" opacity=".22"/>')
 body.append(protagonist(cl, cl_idle, CLX))
 LOOK0, LOOK1 = 16.6, 19.0                          # Lucas se da vuelta para mirarla
 css.append(f"@keyframes lturn{{0%,{pct(LOOK0):.3f}%{{transform:scaleX(1)}}{pct(LOOK0) + .001:.3f}%,{pct(LOOK1):.3f}%"
@@ -1380,7 +1388,7 @@ body.append(f'<g style="transform-origin:{LUX + lu[0].width / 2}px 0;animation:l
 
 # ============================================================ multitud (fila de adelante, fuera de foco)
 for i in range(2):
-    h = random.randint(86, 96)
+    h = round(PERSP_K * (140 - HORIZON)) + random.randint(-2, 2)
     look = crowd_look(["m_casual", "f_coat"][i], random)
     dark = lambda c: tuple(int(16 + v * .12) for v in c) if c else c
     look = {k_: (dark(v_) if isinstance(v_, tuple) else v_) for k_, v_ in look.items()}
