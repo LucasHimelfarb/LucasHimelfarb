@@ -258,21 +258,11 @@ cd.rectangle([0, AVE_TOP + 4, W, GROUND - 1], fill=(64, 70, 68, 255))     # calz
 for lx in range(0, W, 12):                                                # línea divisoria
     cd.line([(lx, AVE_TOP + 11), (lx + 6, AVE_TOP + 11)], fill=(210, 204, 150, 255))
 cd.line([(0, GROUND - 1), (W, GROUND - 1)], fill=(44, 50, 48, 255))
-# bocacalle: la calle transversal sigue hacia el fondo
-cd.polygon([(GX + 4, AVE_TOP + 4), (GX + GW - 4, AVE_TOP + 4), (GC + 9, VY), (GC - 9, VY)], fill=(64, 70, 68, 255))
-for sg in (-1, 1):
-    cd.polygon([(GC + sg * (GW / 2 - 4), AVE_TOP + 4), (GC + sg * (GW / 2), AVE_TOP + 4), (GC + sg * 12, VY),
-                (GC + sg * 9, VY)], fill=(150, 158, 140, 255))
-y = AVE_TOP + 2
-while y > VY + 1:
-    ln = max(1, (y - VY) / 6)
-    cd.line([(GC, y), (GC, y - ln)], fill=(210, 204, 150, 255))
-    y -= ln * 2.2
 # senda peatonal también sobre la avenida, frente a la bocacalle
 for lx in range(GX + 6, GX + GW - 6, 5):
     cd.rectangle([lx, AVE_TOP + 5, lx + 2, GROUND - 3], fill=(206, 208, 196, 255))
 # semáforo en la esquina
-sx_ = GX + GW - 3
+sx_ = GX + GW + 2
 cd.rectangle([sx_, 40, sx_ + 1, GROUND], fill=(30, 36, 32, 255))
 cd.rectangle([sx_ - 2, 32, sx_ + 3, 42], fill=(24, 28, 26, 255))
 cd.rectangle([sx_ - 1, 33, sx_ + 2, 35], fill=(255, 60, 60, 255))
@@ -281,6 +271,86 @@ cd.rectangle([sx_ - 1, 39, sx_ + 2, 41], fill=(30, 60, 40, 255))
 cva = np.asarray(cv, dtype=float)
 m = cva[..., 3] > 0
 near[m, :3] = cva[m, :3]; near[m, 3] = 255
+
+
+def street_corridor():
+    """Calle transversal en perspectiva de un punto: edificios a ambos lados hasta el horizonte.
+
+    Raycast por píxel: cada píxel del hueco choca con el piso (calzada / vereda), con la
+    pared de una de las dos hileras de edificios, o con nada (ahí se ve el skyline del fondo).
+    """
+    F, Z0 = 100.0, 100.0
+    VPX, VPY = GC, 46.0                                   # punto de fuga
+    WC = (GW / 2) * Z0 / F                                # semiancho hasta las fachadas
+    HC = (AVE_TOP + 4 - VPY) * Z0 / F                     # altura de la cámara
+    WR = WC * .72                                         # semiancho de la calzada
+    segs = {}
+    for side in (-1, 1):
+        z, lst = Z0, []
+        while z < 4000:
+            ln = random.uniform(90, 240)
+            lst.append((z, z + ln, random.uniform(HC + 8, HC + 110),
+                        np.array(random.choice([(96, 108, 92), (110, 118, 100), (84, 96, 86), (120, 128, 112), (76, 86, 80)]), float)))
+            z += ln + (random.uniform(20, 60) if random.random() < .15 else 0)   # a veces, otra bocacalle
+        segs[side] = lst
+    y0, y1 = 0, AVE_TOP + 4
+    py, px = np.mgrid[y0:y1, GX:GX + GW].astype(float)
+    dx, dy = px + .5 - VPX, py + .5 - VPY
+    out = np.zeros(px.shape + (4,))
+    haze = np.array([196, 210, 186], float)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        zw = np.where(np.abs(dx) > 1e-6, F * WC / np.abs(dx), np.inf)
+        yw = dy * zw / F                                  # altura (hacia abajo) del punto de pared
+        zg = np.where(dy > 1e-6, F * HC / dy, np.inf)
+        xg = dx * zg / F
+    for (iy, ix), _ in np.ndenumerate(px):
+        z_w, z_g = zw[iy, ix], zg[iy, ix]
+        side = -1 if dx[iy, ix] < 0 else 1
+        if z_g <= z_w and np.isfinite(z_g):              # piso
+            X, z = abs(xg[iy, ix]), z_g
+            if X > WR + 1.2:
+                c = np.array([150, 158, 140.])
+            elif X > WR:
+                c = np.array([190, 196, 180.])
+            else:
+                c = np.array([64, 70, 68.])
+                if X < 1.4 and (z % 50) < 24:
+                    c = np.array([210, 204, 150.])
+                if WR * .45 < X < WR * .5:
+                    c = c - 6
+        else:
+            if not np.isfinite(z_w):
+                continue
+            seg = next((sg for sg in segs[side] if sg[0] <= z_w < sg[1]), None)
+            if seg is None:
+                continue
+            zs, ze, hb, base = seg
+            fy = HC - yw[iy, ix]                           # altura sobre el piso
+            if fy > hb or fy < 0:
+                continue                                    # cielo: se ve el skyline del fondo
+            z = z_w
+            c = base * (1.0 if side < 0 else .8)
+            u = z - zs
+            if fy < 7:                                      # planta baja: vidrieras
+                c = np.array([40, 52, 48.]) if (u % 26) > 4 else c * .85
+                if 5.6 < fy < 6.4:
+                    c = np.array([150, 170, 150.])
+            elif (fy % 9) > 3 and (fy % 9) < 7.5 and (u % 16) > 5 and (u % 16) < 12:
+                c = np.array([48, 62, 56.]) if random.random() > .06 else np.array([170, 190, 160.])
+            if hb - fy < 2:
+                c = base + 26                               # cornisa
+            if u < 3:
+                c = c + 18                                  # arista entre edificios
+        t = 1 - np.exp(-(z - Z0) / 1100)
+        out[iy, ix, :3] = c * (1 - t) + haze * t
+        out[iy, ix, 3] = 255
+    return out, y0
+
+
+corr, cy0 = street_corridor()
+cm = corr[..., 3] > 0
+reg = near[cy0:cy0 + corr.shape[0], GX:GX + GW]
+reg[cm, :3] = corr[cm, :3]; reg[cm, 3] = 255
 
 # vereda
 near[GROUND:, :, 3] = 255
