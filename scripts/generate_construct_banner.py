@@ -679,6 +679,25 @@ for arr, x0_, y0_ in ((oc, ox0, oy1), (pc, PCX, oy0)):
 near_rgb = posterize(np.clip(near[..., :3], 0, 255), 40, 8)
 near_im = Image.fromarray(np.dstack([near_rgb, near[..., 3]]).astype(np.uint8), "RGBA")
 tile = image(near_im, up=1) + image(near_im, x=-W, up=1)
+# sirena del patrullero encendida: barral rojo/azul en doble destello alternado, con halo
+_hh = PCL * .31 * VS
+_tp = int(_hh * .14)
+bar_y0, bar_y1 = oy0 + (_tp - _hh * .1) / VS, oy0 + (_tp + _hh * .03) / VS
+bar_xr, bar_xm, bar_xb = PCX + PCL * .47, PCX + PCL * .55, PCX + PCL * .63
+defs.append('<radialGradient id="sirR"><stop offset="0" stop-color="#ff3040" stop-opacity=".75"/>'
+            '<stop offset="1" stop-color="#ff3040" stop-opacity="0"/></radialGradient>'
+            '<radialGradient id="sirB"><stop offset="0" stop-color="#3a70ff" stop-opacity=".75"/>'
+            '<stop offset="1" stop-color="#3a70ff" stop-opacity="0"/></radialGradient>')
+css.append("@keyframes sirR{0%,8%{opacity:1}9%,16%{opacity:0}17%,25%{opacity:1}26%,100%{opacity:0}}"
+           "@keyframes sirB{0%,49%{opacity:0}50%,58%{opacity:1}59%,66%{opacity:0}67%,75%{opacity:1}76%,100%{opacity:0}}")
+bh_ = bar_y1 - bar_y0
+siren = (f'<g style="animation:sirR .9s infinite steps(1)">'
+         f'<ellipse cx="{(bar_xr + bar_xm) / 2:.1f}" cy="{bar_y0 + bh_ / 2:.1f}" rx="13" ry="8" fill="url(#sirR)"/>'
+         f'<rect x="{bar_xr:.1f}" y="{bar_y0:.1f}" width="{bar_xm - bar_xr:.1f}" height="{bh_:.1f}" fill="#ffd0d4"/></g>'
+         f'<g style="animation:sirB .9s infinite steps(1)">'
+         f'<ellipse cx="{(bar_xm + bar_xb) / 2:.1f}" cy="{bar_y0 + bh_ / 2:.1f}" rx="13" ry="8" fill="url(#sirB)"/>'
+         f'<rect x="{bar_xm:.1f}" y="{bar_y0:.1f}" width="{bar_xb - bar_xm:.1f}" height="{bh_:.1f}" fill="#d4e0ff"/></g>')
+tile += f'<g style="animation:walkvis {T}s infinite linear">{siren}<g transform="translate({-W} 0)">{siren}</g></g>'
 # fase del tile: al congelar, la senda queda justo debajo de Claude y Lucas (x ≈ 93..185)
 TILE0 = 93 - GX - NEAR_SPEED * F0
 body.append(f'<g style="{track(TILE0, NEAR_SPEED, W, 0, 0)}">{tile}</g>')
