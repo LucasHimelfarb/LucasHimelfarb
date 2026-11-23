@@ -1130,32 +1130,74 @@ HAIR = [(30, 24, 20), (70, 50, 32), (110, 84, 56), (150, 140, 130), (20, 18, 18)
 SUIT = [(58, 64, 62), (44, 50, 60), (84, 80, 72), (70, 76, 70), (36, 40, 40), (96, 98, 92)]
 
 
-def figure(h, frame, look, pose="walk"):
-    """Persona de perfil mirando a la izquierda; ancla abajo-centro en (w/2, h)."""
+GAIT_N = 8                                               # cuadros por ciclo de marcha
+GAIT_K = .6                                              # flexión máxima de rodilla en el balanceo (rad)
+
+
+def gait_legs(phase, legL, A):
+    """Ángulos de las dos piernas en la fase dada (0..1). Devuelve [(muslo, rodilla), ...] y la extensión vertical."""
+    legs = []
+    for i in (0, 1):
+        a_ = 2 * np.pi * (phase + i / 2)
+        th = A * np.sin(a_)                              # adelante = positivo
+        kap = GAIT_K * max(0.0, np.cos(a_ + np.pi / 4)) ** 1.6   # flexiona al despegar y se estira al apoyar
+        legs.append((th, kap))
+    return legs
+
+
+def figure(h, frame, look, pose="walk", phase=None, amp=None):
+    """Persona de perfil mirando a la izquierda; ancla abajo-centro en (w/2, h).
+
+    Marcha: con `phase` (0..1) dibuja un cuadro del ciclo: muslo y pantorrilla por pierna, la que avanza
+    flexiona la rodilla y levanta el pie, la de apoyo queda recta y define la altura de la cadera (sube y
+    baja con el paso); los brazos se balancean opuestos a las piernas. `amp` es el ángulo de cadera.
+    """
     u = h / 24
     w = int(12 * u) + 4
-    im = Image.new("RGBA", (w, h + 1), (0, 0, 0, 0))
+    pad_ = int(2 * u) + 2                                    # margen abajo para el sube y baja
+    im = Image.new("RGBA", (w, h + 1 + pad_), (0, 0, 0, 0))
     d = ImageDraw.Draw(im)
     cx = w / 2
     coat, shirt, skin, hair = look["coat"], look.get("shirt", (200, 206, 196)), look["skin"], look["hair"]
     shoe = look.get("shoe", (18, 18, 18))
     pants = look.get("pants", tuple(max(0, c - 10) for c in coat))
     hip, foot = 12.5 * u, h - 1
-    stride = {"walk": [2.4, 0.4][frame], "idle": 0.6}[pose] * u
+    if phase is None:                                        # poses fijas heredadas
+        phase = {0: .25, 1: 0.0}[frame] if pose == "walk" else 0.0
+    A = (amp if amp is not None else .42) if pose == "walk" else .05
+    legL = (foot - .6 * u) - hip
+    th_l, sh_l = legL * .5, legL * .5
+    legs = gait_legs(phase, legL, A)
+    ext = [th_l * np.cos(t_) + sh_l * np.cos(t_ - k_) for t_, k_ in legs]
+    drop = legL - max(ext)                                   # la cadera baja cuando las piernas se abren
+    ankles = []
     # piernas
     fem = look.get("female")
     lw = .75 if fem else 1.0                                            # ancho de pierna
-    for sgn, shade in ((1, .8), (-1, 1.0)):                             # pierna de atrás primero
+    for i, shade in ((1, .8), (0, 1.0)):                                # pierna de atrás primero
         col = tuple(int(c * shade) for c in pants)
-        fx = cx - sgn * stride
-        d.polygon([(cx - 1.1 * u, hip), (cx + 1.1 * u, hip), (fx + lw * u, foot - u), (fx - lw * u, foot - u)], fill=col)
+        t_, k_ = legs[i]
+        kx, ky = cx - th_l * np.sin(t_), hip + th_l * np.cos(t_)
+        ax_, ay_ = kx - sh_l * np.sin(t_ - k_), ky + sh_l * np.cos(t_ - k_)
+        ankles.append(ax_)
+        d.line([(cx, hip), (kx, ky)], fill=col, width=max(2, int(2.1 * lw * u)))
+        d.line([(kx, ky), (ax_, ay_)], fill=col, width=max(2, int(1.8 * lw * u)))
+        d.ellipse([kx - lw * u, ky - lw * u, kx + lw * u, ky + lw * u], fill=col)
+        fy_ = ay_ + .6 * u
+        tilt = max(0.0, k_ - .3) * .8 * u                               # la punta baja al despegar
         if look.get("heels"):
-            d.polygon([(fx - 1.3 * u, foot - .4 * u), (fx + .3 * u, foot - 1.1 * u), (fx + .5 * u, foot - .3 * u),
-                       (fx - 1.3 * u, foot)], fill=shoe)
+            d.polygon([(ax_ - 1.3 * u, fy_ - .4 * u + tilt), (ax_ + .3 * u, fy_ - 1.1 * u), (ax_ + .5 * u, fy_ - .3 * u),
+                       (ax_ - 1.3 * u, fy_ + tilt)], fill=shoe)
         else:
-            d.rectangle([fx - 1.6 * u, foot - u, fx + 0.8 * u, foot], fill=shoe)
+            d.polygon([(ax_ - 1.6 * u, fy_ - u + tilt), (ax_ + .8 * u, fy_ - u), (ax_ + .8 * u, fy_), (ax_ - 1.6 * u, fy_ + tilt)],
+                      fill=shoe)
             if look.get("sole"):
-                d.rectangle([fx - 1.6 * u, foot - .35 * u, fx + 0.8 * u, foot], fill=look["sole"])
+                d.line([(ax_ - 1.6 * u, fy_ + tilt - .2 * u), (ax_ + .8 * u, fy_ - .2 * u)], fill=look["sole"], width=max(1, int(.4 * u)))
+    stride = abs(ankles[0] - ankles[1]) / 2
+    # brazo lejano (detrás del torso)
+    arm_far = tuple(int(c * .62) for c in coat)
+    arm_pose(d, cx + .3 * u, u, legs[0][0] * ARM_GAIN, arm_far, tuple(int(c * .8) for c in skin),
+             max(2, int((1.1 if fem else 1.4) * u)), look.get("short_sleeves"))
     # torso / abrigo
     coat_len = look.get("coat_len", 13.5) * u
     if look.get("backpack"):
@@ -1176,19 +1218,14 @@ def figure(h, frame, look, pose="walk"):
     d.polygon([(cx - 1.9 * u, 4.4 * u), (cx - 0.9 * u, 4.4 * u), (cx - 1.4 * u, 7.5 * u)], fill=shirt)   # cuello
     if look.get("tie"):
         d.line([(cx - 1.5 * u, 5 * u), (cx - 1.7 * u, 8 * u)], fill=look["tie"], width=max(1, int(u * .6)))
-    # brazo (balanceo opuesto a la pierna delantera)
-    swing = {"walk": [-1.6, -0.2][frame], "idle": -0.2}[pose] * u
-    arm = tuple(int(c * .85) for c in coat)
+    # brazo cercano (opuesto a la pierna cercana); el lejano se dibujó detrás del torso
+    arm = tuple(int(c * .8 + 34) for c in coat)            # un poco más claro que el abrigo: se lee el balanceo
     aw_ = max(2, int((1.15 if fem else 1.5) * u))
-    if look.get("short_sleeves"):
-        d.line([(cx, 5 * u), (cx + swing, 10.8 * u)], fill=skin, width=aw_)
-        d.line([(cx, 5 * u), (cx + swing * .35, 7.2 * u)], fill=arm, width=aw_ + 1)
-    else:
-        d.line([(cx, 5 * u), (cx + swing, 10.8 * u)], fill=arm, width=aw_)
-    d.ellipse([cx + swing - .7 * u, 10.6 * u, cx + swing + .7 * u, 11.8 * u], fill=skin)
+    hand_x, hand_y = arm_pose(d, cx, u, -legs[0][0] * ARM_GAIN, arm, skin, aw_, look.get("short_sleeves"))
+    swing = hand_x - cx
     if look.get("bag"):
-        d.line([(cx + swing, 10.9 * u), (cx + swing, 12 * u)], fill=tuple(int(c * .6) for c in look["bag"]), width=1)
-        d.rectangle([cx + swing - 1.0 * u, 12 * u, cx + swing + 1.0 * u, 14.2 * u], fill=look["bag"])
+        d.line([(hand_x, hand_y), (hand_x, hand_y + 1.1 * u)], fill=tuple(int(c * .6) for c in look["bag"]), width=1)
+        d.rectangle([hand_x - 1.0 * u, hand_y + 1.1 * u, hand_x + 1.0 * u, hand_y + 3.3 * u], fill=look["bag"])
     # cabeza
     hx, hy = cx - .3 * u, 2.2 * u
     d.rectangle([cx - .7 * u, 3.4 * u, cx + .3 * u, 4.4 * u], fill=skin)                                  # cuello
@@ -1199,7 +1236,7 @@ def figure(h, frame, look, pose="walk"):
         for ox, oy in ((-1.4, -1.9), (-.4, -2.4), (.6, -2.2), (1.5, -1.5), (1.8, -.4)):
             d.ellipse([hx + (ox - .6) * u, hy + (oy - .5) * u, hx + (ox + .6) * u, hy + (oy + .5) * u], fill=hair)
     if look.get("ponytail"):
-        sw_ = (.3 if frame == 0 else -.2) * u
+        sw_ = .3 * np.sin(2 * np.pi * phase) * u
         d.polygon([(hx + 1.0 * u, hy - 1.4 * u), (hx + 1.8 * u, hy - 1.1 * u), (hx + 2.4 * u + sw_, hy + 2.6 * u),
                    (hx + 1.7 * u + sw_, hy + 2.8 * u)], fill=hair)
     if look.get("bun"):
@@ -1235,23 +1272,46 @@ def figure(h, frame, look, pose="walk"):
         d.rectangle([cx - 2.1 * u, 11.6 * u, cx + 1.9 * u, 12.3 * u], fill=look["belt"])
     if look.get("earpiece"):
         d.line([(hx + .6 * u, hy), (hx + 1.0 * u, hy + 2.4 * u)], fill=look["earpiece"], width=1)
-    return im
+    out_ = Image.new("RGBA", (w, h + 1), (0, 0, 0, 0))
+    out_.paste(im.crop((0, 0, w, h + 1)), (0, int(round(drop))))
+    return out_
 
 
-def claude_figure(h, frame, pose="walk", facing_right=False):
+ARM_GAIN = .9                                            # balanceo de brazos respecto de la cadera
+
+
+def arm_pose(d, sx, u, alpha, col, skin, width, short_sleeves=False):
+    """Brazo desde el hombro con ángulo alpha (adelante = positivo) y codo levemente flexionado."""
+    up_l, fo_l = 3.1 * u, 2.9 * u
+    ex, ey = sx - up_l * np.sin(alpha), 5 * u + up_l * np.cos(alpha)
+    beta = alpha + .25 + .35 * max(0.0, alpha)            # el antebrazo acompaña hacia adelante
+    hx_, hy_ = ex - fo_l * np.sin(beta), ey + fo_l * np.cos(beta)
+    if short_sleeves:
+        d.line([(sx, 5 * u), (ex, ey)], fill=col, width=width + 1)
+        d.line([(ex, ey), (hx_, hy_)], fill=skin, width=width)
+    else:
+        d.line([(sx, 5 * u), (ex, ey)], fill=col, width=width)
+        d.line([(ex, ey), (hx_, hy_)], fill=col, width=width)
+    d.ellipse([hx_ - .65 * u, hy_ - .5 * u, hx_ + .65 * u, hy_ + .7 * u], fill=skin)
+    return hx_, hy_
+
+
+def claude_figure(h, frame, pose="walk", facing_right=False, phase=None, amp=None):
     """Claude como Morpheus: abrigo largo, anteojos negros y cabeza de chispa naranja."""
     look = dict(coat=(30, 40, 34), shirt=(60, 74, 66), skin=(217, 119, 87), hair=(0, 0, 0, 0),
                 pants=(26, 30, 28), coat_len=21, tie=None)
-    base = figure(h, frame, look, pose)
+    base = figure(h, frame, look, pose, phase=phase, amp=amp)
     u = h / 24
     pad = int(1.4 * u)                                   # espacio arriba para las puntas de la chispa
     im = Image.new("RGBA", (base.width, base.height + pad), (0, 0, 0, 0))
     im.paste(base, (0, pad))
     d = ImageDraw.Draw(im)
     w = im.width
-    hx, hy = w / 2 - .3 * u, 2.2 * u + pad - .3 * u
+    a_b = np.asarray(base)[..., 3] > 0
+    top_row = int(np.argmax(a_b.any(1)))                 # la cabeza sube y baja con el paso
+    hx, hy = w / 2 - .3 * u, 2.2 * u + pad - .3 * u + max(0, top_row - int(.2 * u))
     # borrar cabeza y dibujar chispa
-    d.rectangle([hx - 3.4 * u, 0, hx + 3.4 * u, pad + 3.4 * u], fill=(0, 0, 0, 0))
+    d.rectangle([hx - 3.4 * u, 0, hx + 3.4 * u, hy + 1.2 * u], fill=(0, 0, 0, 0))
     orange = (217, 119, 87, 255)
     for a in range(8):
         ang = a * np.pi / 4 + np.pi / 8
@@ -1295,12 +1355,39 @@ WALK_VIS = f"animation:walkvis {T}s infinite linear"
 FRZ_VIS = window(F0, F1, "frzvis")
 
 
-def sprite_group(frames, ox, oy, step=.5, freeze_img=None, flip=False):
-    """frames: [A, B] caminando; freeze_img: cuadro durante el congelado."""
+for i_ in range(GAIT_N):
+    a0_, a1_ = i_ / GAIT_N * 100, (i_ + 1) / GAIT_N * 100
+    css.append(f"@keyframes wk{i_}{{0%,100%{{opacity:0}}{a0_:.2f}%,{a1_ - .01:.2f}%{{opacity:1}}{a1_:.2f}%{{opacity:0}}}}"
+               if i_ else f"@keyframes wk0{{0%,{a1_ - .01:.2f}%{{opacity:1}}{a1_:.2f}%,100%{{opacity:0}}}}")
+
+
+def gait_params(h, world_speed, cadence=1.1):
+    """Amplitud de cadera y duración del ciclo para que el pie de apoyo no patine.
+
+    world_speed en px/s a la escala de la figura. Ciclo = dos pasos; paso = 2 * pierna * sin(A).
+    """
+    legL = (h - 1 - .6 * h / 24) - 12.5 * h / 24
+    step = max(1e-3, abs(world_speed)) * cadence / 2
+    A = float(np.clip(np.arcsin(min(.99, step / (2 * legL))), .12, .5))
+    cyc = 2 * (2 * legL * np.sin(A)) / max(1e-3, abs(world_speed))
+    return A, float(np.clip(cyc, .7, 2.2))
+
+
+def walk_frames(fn, A):
+    return [fn(i / GAIT_N, A) for i in range(GAIT_N)]
+
+
+def sprite_group(frames, ox, oy, step=.5, freeze_img=None, flip=False, delay=None):
+    """frames: cuadros de marcha (2 heredados o GAIT_N); freeze_img: cuadro durante el congelado."""
     fx = f' transform="translate({2 * ox + frames[0].width} 0) scale(-1 1)"' if flip else ""
-    a, b = frames
-    walk = (f'<g style="animation:fa {step}s infinite steps(1)">{image(a, ox, oy, up=1)}</g>'
-            f'<g style="animation:fb {step}s infinite steps(1)">{image(b, ox, oy, up=1)}</g>')
+    if len(frames) == 2:
+        a, b = frames
+        walk = (f'<g style="animation:fa {step}s infinite steps(1)">{image(a, ox, oy, up=1)}</g>'
+                f'<g style="animation:fb {step}s infinite steps(1)">{image(b, ox, oy, up=1)}</g>')
+    else:
+        dl = -random.Random(len(css)).uniform(0, step) if delay is None else delay
+        walk = "".join(f'<g opacity="{1 if i == 0 else 0}" style="animation:wk{i} {step:.3f}s {dl:.3f}s infinite steps(1)">'
+                       f'{image(f, ox, oy, up=1)}</g>' for i, f in enumerate(frames))
     s = f'<g style="{WALK_VIS}">{walk}</g>'
     if freeze_img is not None:
         s += f'<g opacity="0" style="{FRZ_VIS}">{image(freeze_img, ox, oy, up=1)}</g>'
@@ -1427,7 +1514,7 @@ for i in range(10):
     vz = ZR / WALK                                       # una vuelta por ciclo: paso de caminata para todos
     zst = prng.uniform(0, ZR)
     look = crowd_look(KINDS[(i * 5) % len(KINDS)], prng)
-    fr = [figure(PREF, 0, look), figure(PREF, 1, look)]
+    fr = walk_frames(lambda ph, a, look=look: figure(PREF, 0, look, phase=ph, amp=a), .3)
     flip = (sd > 0) != away                              # de perfil, mirando hacia donde camina
     FADE = 40.0                                          # tramo (en z) de aparición / desaparición
 
@@ -1456,7 +1543,7 @@ for i in range(10):
     kf = [f"{pct(t):.3f}%{{{body_}}}" for t, body_ in kf]
     k = nid("cp")
     css.append(f"@keyframes {k}{{{''.join(kf)}}}")
-    spr = sprite_group(fr, 0, 0, step=.5, freeze_img=frozen(fr[0]), flip=flip)
+    spr = sprite_group(fr, 0, 0, step=1.15, freeze_img=frozen(fr[0]), flip=flip)
     peds.append(f'<g style="transform-origin:0 0;animation:{k} {T}s infinite linear">{spr}</g>')
 cross_peds = "".join(peds)
 cross_peds += f'<g transform="translate({-TW} 0)">{cross_peds}</g>'
@@ -1467,15 +1554,19 @@ FAR_SW_Y = AVE_TOP + 2.5                                 # pies sobre la vereda 
 FAR_H = round(PERSP_K * (FAR_SW_Y - HORIZON))            # ~20 px: misma regla de perspectiva
 frng = random.Random(31)
 FSPAN, FMARG = W + 60, 30
+FSPAN_R = 457                                             # con k = 2: ~38 px/s relativo => ~11 px/s propios (~1 m/s)
 far_peds = []
 for i in range(7):
     look = crowd_look(KINDS[(i * 7 + 3) % len(KINDS)], frng)
     right = i % 2 == 0
-    k = 3 if right else 1                                # relativo a la cámara: los de la derecha la superan
-    v = k * FSPAN / WALK
-    fr = [figure(FAR_H, 0, look), figure(FAR_H, 1, look)]
-    spr = sprite_group(fr, 0, -FAR_H, step=.5, freeze_img=frozen(fr[0]), flip=right)
-    far_peds.append(f'<g style="{track(i * FSPAN / 7 + frng.uniform(-10, 10), v, FSPAN, FMARG, FAR_SW_Y + frng.uniform(-.6, .6))}">{spr}</g>')
+    span_f = FSPAN_R if right else FSPAN
+    k = 2 if right else 1
+    v = k * span_f / WALK
+    world = v - NEAR_SPEED
+    A_, cyc_ = gait_params(FAR_H, world)
+    fr = walk_frames(lambda ph, a, look=look: figure(FAR_H, 0, look, phase=ph, amp=a), A_)
+    spr = sprite_group(fr, 0, -FAR_H, step=cyc_, freeze_img=frozen(fr[0]), flip=right)
+    far_peds.append(f'<g style="{track(i * span_f / 7 + frng.uniform(-10, 10), v, span_f, FMARG, FAR_SW_Y + frng.uniform(-.6, .6))}">{spr}</g>')
 body.extend(far_peds)
 
 # ------------------------------------------------ un peatón dobla en la esquina y se va por la calle del fondo
@@ -1485,10 +1576,11 @@ TA0, TTURN, TB1 = 16.0, 19.5, 23.5                       # tiempos efectivos: ll
 XS = -(WR + 6)                                            # vereda izquierda de la calle del fondo
 z_t = F * HC / (FAR_SW_Y - VPY)
 x_corner = VPX + F * XS / z_t                            # en coordenadas del tile
-V_A = 15.0                                               # paso por la vereda de enfrente (px/s)
+V_A = 11.0                                               # paso tranquilo por la vereda de enfrente (~1 m/s)
 kz_t = np.log(1500 / z_t) / (TB1 - TTURN)
 look_t = crowd_look("f_coat", random.Random(5))
-fr_t = [figure(FAR_H, 0, look_t), figure(FAR_H, 1, look_t)]
+A_t, cyc_t = gait_params(FAR_H, V_A)
+fr_t = walk_frames(lambda ph, a: figure(FAR_H, 0, look_t, phase=ph, amp=a), A_t)
 kf_t = []
 for t in np.arange(0, T + .001, .2):
     e = eff(t)
@@ -1507,7 +1599,7 @@ css.append(f"@keyframes {kt_}{{{''.join(kf_t)}}}")
 # va en las dos copias del tramo: siempre está cerca de la esquina, así la otra copia queda fuera de cuadro
 # y la vuelta del tramo no lo hace saltar
 turner_one = (f'<g style="transform-origin:0 0;animation:{kt_} {T}s infinite linear">'
-              f'{sprite_group(fr_t, -fr_t[0].width / 2, -FAR_H, step=.5, freeze_img=frozen(fr_t[0]), flip=True)}</g>')
+              f'{sprite_group(fr_t, -fr_t[0].width / 2, -FAR_H, step=cyc_t, freeze_img=frozen(fr_t[0]), flip=True)}</g>')
 turner = "".join(f'<g transform="translate({off} 0)">{turner_one}</g>' for off in (0, -TW))
 body.append(f'<g style="{track(TILE0, NEAR_SPEED, TW, 0, 0)}">{turner}</g>')
 
@@ -1726,9 +1818,10 @@ hyd_svg = "".join(f'<g transform="translate({off} 0)">{hyd_svg}</g>' for off in 
 body.append(f'<g style="{track(TILE0, NEAR_SPEED, TW, 0, 0)}">{hyd_svg}</g>')
 
 # ============================================================ multitud: dos carriles de vereda
-# Carril de enfrente: gente que va hacia la derecha. Carril cercano (el nuestro): gente que viene hacia
-# la izquierda como Claude y Lucas, un poco más rápido, pasándolos por detrás.
+# Carril de enfrente: gente que va hacia la derecha (~1 m/s). Carril cercano (el nuestro): gente que va
+# hacia la izquierda como Claude y Lucas pero más despacio (~0.5 m/s): ellos la pasan. Nadie está apurado.
 SPAN, MARGIN = W + 60, 30
+SPAN_FAR_LANE = 572                                       # con k = 2: ~47.7 px/s relativo => ~21 px/s propios
 KEEP_OUR_SIDE = {1, 2, 4, 5, 7, 10}                 # menos gente de este lado: 4 en el carril de enfrente, 2 en el nuestro
 crowd_back = []
 for i in range(11):
@@ -1738,21 +1831,25 @@ for i in range(11):
     k = random.choice([-1, 1, 1, 2, 2, 3])                     # (se sortea igual para no alterar la secuencia)
     near_lane = i % 3 == 2
     ly = LANE_NEAR if near_lane else LANE_FAR
-    k = -1 if near_lane else (3 if abs(k) < 3 else 4)   # más rápido que la cámara, para no 'retroceder'
     h = round(PERSP_K * (ly - HORIZON) * h / 38)               # escala de la regla de perspectiva
-    v = k * SPAN / WALK
-    flip = k > 0                                   # los que van a la derecha miran a la derecha
-    fr = [figure(h, 0, look), figure(h, 1, look)]
-    s = sprite_group(fr, 0, -h, step=random.choice([.45, .5, .55]), freeze_img=frozen(fr[0]), flip=flip)
-    x0_c = i * SPAN / 11 + random.uniform(-8, 8)
+    span_i = SPAN if near_lane else SPAN_FAR_LANE
+    k = 1 if near_lane else 2
+    v = k * span_i / WALK                                       # relativo a la cámara (siempre hacia la derecha)
+    world = v - NEAR_SPEED                                      # propio: + derecha, - izquierda
+    flip = world > 0                                            # mira hacia donde camina
+    A_, cyc_ = gait_params(h, world)
+    fr = walk_frames(lambda ph, a, h=h, look=look: figure(h, 0, look, phase=ph, amp=a), A_)
+    s = sprite_group(fr, 0, -h, step=cyc_, freeze_img=frozen(fr[0]), flip=flip)
+    random.choice([.45, .5, .55])                               # (mismo consumo aleatorio que antes)
+    x0_c = i * span_i / 11 + random.uniform(-8, 8)
     if i not in KEEP_OUR_SIDE:                         # (se generan igual para no alterar la secuencia aleatoria)
         continue
-    crowd_back.append((ly, f'<g style="{track(x0_c, v, SPAN, MARGIN, ly)}">{s}</g>'))
+    crowd_back.append((ly, f'<g style="{track(x0_c, v, span_i, MARGIN, ly)}">{s}</g>'))
 crowd_back = [g_ for _, g_ in sorted(crowd_back, key=lambda c: c[0])]   # el carril de enfrente se dibuja primero
 body.extend(crowd_back)
 
 # ============================================================ la mujer del vestido rojo (y el agente)
-def woman_in_red(h, frame):
+def woman_in_red(h, frame, phase=None, amp=.4):
     """Silueta de reloj de arena: vestido rojo ajustado a la rodilla, pelo rubio largo, tacos."""
     u = h / 24
     w = int(12 * u) + 6
@@ -1761,21 +1858,30 @@ def woman_in_red(h, frame):
     skin, skin_sh = (238, 204, 176), (214, 172, 146)
     red, red_hi, red_sh = (212, 22, 44), (244, 70, 84), (150, 10, 30)
     hair, hair_hi = (232, 192, 104), (250, 226, 150)
-    sway = (.35 if frame == 0 else -.35) * u              # balanceo de cadera
-    stride = (1.7 if frame == 0 else .35) * u
+    if phase is None:
+        phase = {0: .25, 1: 0.0}[frame]
+    sway = .35 * np.sin(2 * np.pi * phase) * u            # balanceo de cadera
     foot = h - 1
     knee = 15.6 * u
-    # piernas (de atrás primero), largas y finas, con tacos
-    for sg, col in ((1, skin_sh), (-1, skin)):
-        fx = cx + sway * .5 - sg * stride
-        d.polygon([(cx + sway - .7 * u, knee - u), (cx + sway + .6 * u, knee - u), (fx + .35 * u, foot - 1.1 * u),
-                   (fx - .35 * u, foot - 1.1 * u)], fill=col)
-        d.polygon([(fx - 1.2 * u, foot - .6 * u), (fx + .3 * u, foot - 1.2 * u), (fx + .5 * u, foot - .4 * u),
-                   (fx - 1.2 * u, foot)], fill=(176, 12, 34))                                   # zapato
-        d.line([(fx + .45 * u, foot - .5 * u), (fx + .5 * u, foot)], fill=(120, 6, 24), width=1)  # taco
+    hip_w = 11.5 * u
+    legL = (foot - 1.0 * u) - hip_w
+    legs = gait_legs(phase, legL, amp)
+    ext = [legL * .5 * np.cos(t_) + legL * .5 * np.cos(t_ - k_) for t_, k_ in legs]
+    drop = legL - max(ext)
+    # piernas (de atrás primero), largas y finas, con tacos y rodilla
+    for i_, col in ((1, skin_sh), (0, skin)):
+        t_, k_ = legs[i_]
+        hxp = cx + sway
+        kx, ky = hxp - legL * .5 * np.sin(t_), hip_w + legL * .5 * np.cos(t_)
+        fx, fy = kx - legL * .5 * np.sin(t_ - k_), ky + legL * .5 * np.cos(t_ - k_) + 1.0 * u
+        d.line([(hxp, hip_w), (kx, ky)], fill=col, width=max(2, int(1.3 * u)))
+        d.line([(kx, ky), (fx, fy - 1.0 * u)], fill=col, width=max(1, int(1.0 * u)))
+        d.polygon([(fx - 1.2 * u, fy - .6 * u), (fx + .3 * u, fy - 1.2 * u), (fx + .5 * u, fy - .4 * u),
+                   (fx - 1.2 * u, fy)], fill=(176, 12, 34))                                     # zapato
+        d.line([(fx + .45 * u, fy - .5 * u), (fx + .5 * u, fy)], fill=(120, 6, 24), width=1)    # taco
     # pelo largo por detrás (cae hasta media espalda y se mueve)
     hx, hy = cx - .2 * u, 2.3 * u
-    flow = (.4 if frame == 0 else -.2) * u
+    flow = .35 * np.sin(2 * np.pi * phase + 1) * u
     d.polygon([(hx - .2 * u, hy - 1.6 * u), (hx + 1.6 * u, hy - 1.2 * u), (hx + 2.3 * u + flow, hy + 3.5 * u),
                (hx + 2.0 * u + flow, hy + 6.8 * u), (hx + .9 * u + flow, hy + 6.2 * u), (hx + .3 * u, hy + 2.6 * u)], fill=hair)
     # vestido: hombros, busto, cintura marcada, cadera, falda a la rodilla
@@ -1792,7 +1898,7 @@ def woman_in_red(h, frame):
     # escote y hombros descubiertos
     d.polygon([(cx - 1.4 * u, 4.2 * u), (cx + 1.1 * u, 4.2 * u), (cx + .6 * u, 4.9 * u), (cx - 1.2 * u, 5.0 * u)], fill=skin)
     # brazo con balanceo y cartera chica
-    sw = (-1.2 if frame == 0 else .6) * u
+    sw = 1.1 * np.sin(2 * np.pi * phase) * u              # opuesto a la pierna cercana
     d.line([(cx + .1 * u, 4.8 * u), (cx + sw * .5, 7.6 * u), (cx + sw, 10.2 * u)], fill=skin, width=max(1, int(.75 * u)))
     d.rectangle([cx + sw - .7 * u, 10.0 * u, cx + sw + .6 * u, 10.9 * u], fill=(30, 20, 24))
     # cabeza
@@ -1803,24 +1909,28 @@ def woman_in_red(h, frame):
     d.line([(hx - .3 * u, hy - 1.7 * u), (hx + 1.2 * u, hy - 1.2 * u)], fill=hair_hi, width=1)
     d.point((hx - .9 * u, hy - .3 * u), fill=(40, 30, 40))                                         # ojo
     d.line([(hx - 1.2 * u, hy + .75 * u), (hx - .75 * u, hy + .75 * u)], fill=(200, 16, 40), width=1)  # labios
-    return im
+    out_ = Image.new("RGBA", im.size, (0, 0, 0, 0))
+    out_.paste(im, (0, int(round(drop))))                 # el pie de apoyo toca el piso
+    return out_
 
 
 AGENT = dict(coat=(36, 40, 40), shirt=(226, 230, 222), skin=(214, 172, 140), hair=(28, 24, 20), tie=(8, 8, 8),
              shades=(6, 6, 8), earpiece=(200, 200, 190), pants=(30, 32, 34), coat_len=13.5)
 WY = LANE_FAR
 WH, APPEAR, TURN = round(PERSP_K * (WY - HORIZON)), 14.3, 18.6                                            # carril medio: entre la multitud y los protagonistas
-wred = [woman_in_red(WH, 0), woman_in_red(WH, 1)]
-wagt = [figure(WH, 0, AGENT), figure(WH, 1, AGENT)]
+W_WORLD = 47 - NEAR_SPEED                                # su velocidad propia (WV relativo menos la cámara)
+A_w, cyc_w = gait_params(WH, W_WORLD)
+wred = walk_frames(lambda ph, a: woman_in_red(WH, 0, phase=ph, amp=a), A_w)
+wagt = walk_frames(lambda ph, a: figure(WH, 0, AGENT, phase=ph, amp=a), A_w)
 # aparece de golpe (con un parpadeo) y cruza; al "mirá de nuevo" se vuelve agente
 css.append(f"@keyframes wred{{0%,{pct(APPEAR) - .001:.3f}%{{opacity:0}}{pct(APPEAR):.3f}%{{opacity:1}}"
            f"{pct(APPEAR + .08):.3f}%{{opacity:.15}}{pct(APPEAR + .16):.3f}%,{pct(TURN) - .001:.3f}%{{opacity:1}}"
            f"{pct(TURN):.3f}%,100%{{opacity:0}}}}")
 css.append(f"@keyframes wagt{{0%,{pct(TURN) - .001:.3f}%{{opacity:0}}{pct(TURN):.3f}%{{opacity:1}}{pct(TURN + .1):.3f}%{{opacity:.2}}"
            f"{pct(TURN + .2):.3f}%{{opacity:1}}{pct(TURN + .3):.3f}%{{opacity:.4}}{pct(TURN + .4):.3f}%,99.9%{{opacity:1}}100%{{opacity:0}}}}")
-w_red = f'<g opacity="0" style="animation:wred {T}s infinite linear">{sprite_group(wred, 0, -WH, step=.42, flip=True)}</g>'
+w_red = f'<g opacity="0" style="animation:wred {T}s infinite linear">{sprite_group(wred, 0, -WH, step=cyc_w, flip=True)}</g>'
 w_agt = (f'<g opacity="0" style="animation:wagt {T}s infinite linear">'
-         f'{sprite_group(wagt, 0, -WH, step=.42, freeze_img=frozen(wagt[0]), flip=True)}</g>')
+         f'{sprite_group(wagt, 0, -WH, step=cyc_w, freeze_img=frozen(wagt[0]), flip=True)}</g>')
 WV, WX0 = 47, -10                                   # más rápida que la cámara; pasa junto a Lucas ~17.6 s
 x_at = lambda t: WX0 + WV * (t - APPEAR)
 kw = nid("wk")
@@ -1834,29 +1944,28 @@ FEET = LANE_NEAR
 PH = round(PERSP_K * (FEET - HORIZON))                  # misma regla que el resto de la gente
 
 
-def protagonist(frames, idle, ox, bob_delay=0):
-    a, b = frames
-    walk = (f'<g style="animation:fa .6s infinite steps(1)">{image(a, ox, FEET - a.height + 1, up=1)}</g>'
-            f'<g style="animation:fb .6s infinite steps(1)">{image(b, ox, FEET - b.height + 1, up=1)}</g>')
-    return (f'<g style="{WALK_VIS}"><g style="animation:pbob .6s {bob_delay}s infinite steps(1)">{walk}</g></g>'
+def protagonist(frames, idle, ox, cyc, delay=0.0):
+    walk = "".join(f'<g opacity="{1 if i == 0 else 0}" style="animation:wk{i} {cyc:.3f}s {delay:.3f}s infinite steps(1)">'
+                   f'{image(f, ox, FEET - f.height + 1, up=1)}</g>' for i, f in enumerate(frames))
+    return (f'<g style="{WALK_VIS}">{walk}</g>'
             f'<g opacity="0" style="{FRZ_VIS}">{image(idle, ox, FEET - idle.height + 1, up=1)}</g>')
 
 
-css.append("@keyframes pbob{0%,49.9%{transform:translateY(0)}50%,100%{transform:translateY(-1px)}}")
-cl = [claude_figure(PH, 0), claude_figure(PH, 1)]
+A_p, cyc_p = gait_params(PH, NEAR_SPEED)                 # caminan a la velocidad de la cámara: el pie no patina
+cl = walk_frames(lambda ph, a: claude_figure(PH, 0, phase=ph, amp=a), A_p)
 cl_idle = claude_figure(PH, 0, pose="idle", facing_right=True)
-lu = [figure(PH, 0, LUCAS), figure(PH, 1, LUCAS)]
+lu = walk_frames(lambda ph, a: figure(PH, 0, LUCAS, phase=ph, amp=a), A_p)
 lu_idle = figure(PH, 0, LUCAS, pose="idle")
 CLX, LUX = 98, 146
 # sombras
 for x_ in (CLX, LUX):
     body.append(f'<ellipse cx="{x_ + cl[0].width / 2}" cy="{FEET}" rx="8" ry="1.6" fill="#000" opacity=".22"/>')
-body.append(protagonist(cl, cl_idle, CLX))
+body.append(protagonist(cl, cl_idle, CLX, cyc_p))
 LOOK0, LOOK1 = 16.6, 19.0                          # Lucas se da vuelta para mirarla
 css.append(f"@keyframes lturn{{0%,{pct(LOOK0):.3f}%{{transform:scaleX(1)}}{pct(LOOK0) + .001:.3f}%,{pct(LOOK1):.3f}%"
            f"{{transform:scaleX(-1)}}{pct(LOOK1) + .001:.3f}%,100%{{transform:scaleX(1)}}}}")
 body.append(f'<g style="transform-origin:{LUX + lu[0].width / 2}px 0;animation:lturn {T}s infinite linear">'
-            f'{protagonist(lu, lu_idle, LUX, .3)}</g>')
+            f'{protagonist(lu, lu_idle, LUX, cyc_p, -cyc_p * .4)}</g>')
 
 # ============================================================ cámara más cerca
 scene_svg = "".join(body)
