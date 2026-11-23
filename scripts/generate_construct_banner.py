@@ -197,17 +197,18 @@ def track(x0, v, span, margin, y):
 yy, xx = np.mgrid[0:H, 0:W]
 GROUND = 92
 sky = ramp(yy / H, [(0, (150, 172, 150)), (.5, (196, 210, 186)), (1, (210, 218, 196))])
-far = np.zeros((H, W), bool); far_rgb = sky.copy()
+# (el skyline plano del fondo se retiró: solo queda el cielo con bruma. El bucle se conserva
+#  sin dibujar para no alterar la secuencia aleatoria del resto de la escena)
+far = np.zeros((H, W), bool); far_rgb = sky.copy(); _discard = sky.copy()
 x = 0
 while x < W:
     bw, top = random.randint(14, 34), random.randint(6, 40)
-    far[top:GROUND, x:x + bw] = True
     c = np.array(random.choice([(120, 138, 122), (132, 148, 128), (110, 126, 112)]), float)
-    far_rgb[top:GROUND, x:x + bw] = c
-    far_rgb[top:GROUND, x] = c + 18
+    _discard[top:GROUND, x:x + bw] = c
+    _discard[top:GROUND, x] = c + 18
     for wy in range(top + 3, GROUND, 4):
         for wx in range(x + 2, min(W, x + bw - 2), 3):
-            far_rgb[wy:wy + 2, wx] = c - 22 if random.random() < .85 else c + 30
+            _discard[wy:wy + 2, wx] = c - 22 if random.random() < .85 else c + 30
     x += bw + random.randint(0, 2)
 haze = np.clip((yy - 20) / 70, 0, 1)[..., None]
 far_rgb = far_rgb * (1 - haze * .35) + np.array([200, 212, 190]) * haze * .35
@@ -292,9 +293,9 @@ def _finish(big, w, h):
 
 def vehicle_side(length, body, kind="sedan"):
     """Vehículo de perfil mirando a la izquierda. Altura con proporción real (auto ~1.45 m x 4.6 m)."""
-    ratio = {"sedan": .31, "taxi": .31, "van": .42, "bus": .30}[kind]
+    ratio = {"sedan": .31, "taxi": .31, "police": .31, "van": .42, "bus": .30}[kind]
     L, Hh = length * VS, length * ratio * VS
-    top_pad = int(Hh * (.14 if kind == "taxi" else .02))
+    top_pad = int(Hh * (.14 if kind in ("taxi", "police") else .02))
     im = Image.new("RGBA", (int(L), int(Hh) + top_pad + VS * 2), (0, 0, 0, 0)); d = ImageDraw.Draw(im)
     P = lambda pts: [(x * L, y * Hh + top_pad) for x, y in pts]
     hi, mid, lo, dark = _shade(body, 1.22), body, _shade(body, .78), _shade(body, .5)
@@ -343,6 +344,14 @@ def vehicle_side(length, body, kind="sedan"):
         d.rectangle(P([(.94, .62), (1, .76)])[0] + P([(1, .76)])[0], fill=(40, 42, 44))
         d.rectangle(P([(0, .47), (.035, .55)])[0] + P([(.035, .55)])[0], fill=(250, 244, 200))          # faro
         d.rectangle(P([(.965, .44), (1, .54)])[0] + P([(1, .54)])[0], fill=(220, 30, 36))                # luz trasera
+        if kind == "police":                                                    # puertas blancas, escudo, barral
+            d.polygon(P([(.33, .4), (.78, .37), (.79, .62), (.33, .62)]), fill=(232, 232, 226))
+            d.line(P([(.36, .38), (.36, .62)]), fill=dark, width=max(1, VS // 2))
+            d.line(P([(.56, .38), (.56, .62)]), fill=(150, 150, 150), width=max(1, VS // 2))
+            d.ellipse(P([(.43, .45), (.49, .56)])[0] + P([(.49, .56)])[0], fill=(206, 170, 60))
+            d.rectangle([L * .46, top_pad - Hh * .1, L * .64, top_pad + Hh * .03], fill=(30, 30, 34))
+            d.rectangle([L * .47, top_pad - Hh * .09, L * .55, top_pad + Hh * .0], fill=(220, 40, 50))
+            d.rectangle([L * .55, top_pad - Hh * .09, L * .63, top_pad + Hh * .0], fill=(50, 90, 230))
         if kind == "taxi":
             d.rectangle([L * .5, top_pad - Hh * .12, L * .6, top_pad + Hh * .04], fill=(240, 236, 200))
             d.line(P([(.08, .55), (.95, .52)]), fill=(30, 30, 30), width=VS * 2)                        # franja
@@ -558,6 +567,24 @@ for zq, colq in sorted([(112, VEH_COLS[2]), (150, VEH_COLS[1]), (198, VEH_COLS[0
             ty_, tx_ = int(qy) + yy_q, int(qx) + xx_q
             if ca[yy_q, xx_q, 3] > 0 and 0 <= ty_ < corr.shape[0] and 0 <= tx_ < corr.shape[1]:
                 corr[ty_, tx_, :3] = ca[yy_q, xx_q, :3]; corr[ty_, tx_, 3] = 255
+# alumbrado público en las veredas de la calle transversal, en perspectiva
+lamp_cv = Image.new("RGBA", (corr.shape[1], corr.shape[0]), (0, 0, 0, 0)); ld = ImageDraw.Draw(lamp_cv)
+for zl in sorted(np.arange(118, 2600, 95), reverse=True):
+    t_h = 1 - np.exp(-(zl - Z0) / 1100)
+    pole = tuple(int(v) for v in np.array([44, 50, 48]) * (1 - t_h) + np.array([196, 210, 186]) * t_h) + (255,)
+    head = tuple(int(v) for v in np.array([226, 230, 210]) * (1 - t_h) + np.array([196, 210, 186]) * t_h) + (255,)
+    wdt = max(1, round(1.6 * Z0 / zl))
+    for sd in (-1, 1):
+        Xl = sd * (WR + 4)
+        xb = VPX + F * Xl / zl - GX
+        yb, yt = VPY + F * HC / zl - cy0, VPY + F * (HC - 34) / zl - cy0
+        xa = VPX + F * (Xl - sd * 7) / zl - GX
+        ld.line([(xb, yb), (xb, yt)], fill=pole, width=wdt)
+        ld.line([(xb, yt), (xa, yt)], fill=pole, width=wdt)
+        ld.rectangle([min(xa, xa + sd * 2.2 * Z0 / zl), yt, max(xa, xa + sd * 2.2 * Z0 / zl), yt + max(1, 1.2 * Z0 / zl)], fill=head)
+la = np.asarray(lamp_cv, dtype=float)
+lm = la[..., 3] > 0
+corr[lm, :3] = la[lm, :3]; corr[lm, 3] = 255
 cm = corr[..., 3] > 0
 reg = near[cy0:cy0 + corr.shape[0], GX:GX + GW]
 reg[cm, :3] = corr[cm, :3]; reg[cm, 3] = 255
@@ -586,6 +613,60 @@ for _ in range(3):                                                      # postes
     px = random.choice([random.randrange(10, GX - 12), random.randrange(GX + GW + 8, W - 10)])
     near[30:GROUND + 2, px:px + 2, :3] = (40, 48, 44); near[30:GROUND + 2, px:px + 2, 3] = 255
     near[30:32, px - 4:px + 6, :3] = (40, 48, 44); near[30:32, px - 4:px + 6, 3] = 255
+
+
+def officer_leg_up(h):
+    """Policía de pie mirando a la derecha, con un pie apoyado en el paragolpe y el brazo sobre la rodilla."""
+    u = h / 24
+    w = int(12 * u) + 6
+    im = Image.new("RGBA", (w, h + 1), (0, 0, 0, 0)); d = ImageDraw.Draw(im)
+    cx = w * .42
+    navy, navy_d, skin, shoe = (30, 40, 74), (22, 30, 56), (196, 150, 118), (12, 12, 14)
+    foot = h - 1
+    # pierna de apoyo (recta) y pierna levantada (rodilla adelante, pie sobre el paragolpe)
+    d.polygon([(cx - 1.0 * u, 12.5 * u), (cx + .9 * u, 12.5 * u), (cx + .7 * u, foot - u), (cx - .9 * u, foot - u)], fill=navy_d)
+    d.rectangle([cx - .9 * u, foot - u, cx + 1.4 * u, foot], fill=shoe)
+    kx, ky = cx + 3.6 * u, 11.8 * u                                     # rodilla
+    fx, fy = cx + 4.4 * u, foot - 6.0 * u                               # pie sobre el paragolpe
+    d.polygon([(cx - .6 * u, 12.0 * u), (cx + .8 * u, 13.4 * u), (kx + .6 * u, ky + .6 * u), (kx - .2 * u, ky - .7 * u)], fill=navy)
+    d.polygon([(kx - .4 * u, ky), (kx + .8 * u, ky), (fx + .6 * u, fy - u), (fx - .6 * u, fy - u)], fill=navy)
+    d.rectangle([fx - .8 * u, fy - u, fx + 1.6 * u, fy], fill=shoe)
+    # torso inclinado hacia adelante
+    d.polygon([(cx - 1.4 * u, 4.6 * u), (cx + 1.6 * u, 4.2 * u), (cx + 2.0 * u, 12.6 * u), (cx - 1.6 * u, 12.8 * u)], fill=navy)
+    d.rectangle([cx - 1.7 * u, 11.6 * u, cx + 2.0 * u, 12.4 * u], fill=(14, 14, 16))                   # cinturón
+    d.rectangle([cx + .6 * u, 6.0 * u, cx + 1.3 * u, 6.8 * u], fill=(230, 190, 70))                     # placa
+    # brazo apoyado sobre la rodilla
+    d.line([(cx + .4 * u, 5.2 * u), (cx + 2.2 * u, 9.0 * u), (kx + .2 * u, ky - .9 * u)], fill=navy_d, width=max(2, int(1.4 * u)))
+    d.ellipse([kx - .4 * u, ky - 1.5 * u, kx + .9 * u, ky - .4 * u], fill=skin)
+    # cabeza con gorra
+    hx, hy = cx + .6 * u, 2.3 * u
+    d.rectangle([cx - .1 * u, 3.4 * u, cx + .9 * u, 4.6 * u], fill=skin)
+    d.ellipse([hx - 1.5 * u, hy - 1.8 * u, hx + 1.5 * u, hy + 1.7 * u], fill=skin)
+    d.rectangle([hx - 1.7 * u, hy - 2.4 * u, hx + 1.6 * u, hy - 1.0 * u], fill=(26, 34, 64))
+    d.rectangle([hx - 1.7 * u, hy - 1.3 * u, hx + 1.6 * u, hy - 1.0 * u], fill=(10, 10, 12))
+    d.rectangle([hx + 1.2 * u, hy - 1.2 * u, hx + 2.6 * u, hy - .8 * u], fill=(10, 10, 12))            # visera
+    d.rectangle([hx + .4 * u, hy - 2.1 * u, hx + 1.0 * u, hy - 1.5 * u], fill=(220, 180, 60))
+    d.rectangle([hx - 1.4 * u, hy - 1.0 * u, hx - .4 * u, hy + .4 * u], fill=(40, 30, 24))             # pelo de la nuca
+    d.point((hx + .9 * u, hy - .2 * u), fill=(30, 24, 20))
+    return im
+
+
+# patrullero estacionado junto al cordón de enfrente, con el oficial apoyado en el paragolpe
+PCX, PCL = 44, 62                                        # posición en el tile y largo
+pcar = vehicle_side(PCL, (26, 28, 32), "police")
+pbase = AVE_TOP + 7
+pc = np.asarray(pcar, dtype=float)
+oy0 = pbase - pcar.height + 2
+off_ = officer_leg_up(34)
+oc = np.asarray(off_, dtype=float)
+ox0, oy1 = PCX - off_.width + int(off_.width * .2), pbase - off_.height + 1
+for arr, x0_, y0_ in ((oc, ox0, oy1), (pc, PCX, oy0)):
+    hh, ww = arr.shape[:2]
+    ys_, xs_ = np.nonzero(arr[..., 3] > 0)
+    ty, tx = ys_ + y0_, xs_ + x0_
+    ok = (ty >= 0) & (ty < H) & (tx >= 0) & (tx < W)
+    near[ty[ok], tx[ok], :3] = arr[ys_[ok], xs_[ok], :3]
+    near[ty[ok], tx[ok], 3] = 255
 near_rgb = posterize(np.clip(near[..., :3], 0, 255), 40, 8)
 near_im = Image.fromarray(np.dstack([near_rgb, near[..., 3]]).astype(np.uint8), "RGBA")
 tile = image(near_im, up=1) + image(near_im, x=-W, up=1)
