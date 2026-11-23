@@ -281,72 +281,113 @@ WR = WC * .72                                         # semiancho de la calzada
 
 
 def street_corridor():
-    """Calle transversal en perspectiva de un punto: edificios a ambos lados hasta el horizonte.
+    """Calle transversal en perspectiva de un punto, con edificios como volúmenes.
 
-    Raycast por píxel: cada píxel del hueco choca con el piso (calzada / vereda), con la
-    pared de una de las dos hileras de edificios, o con nada (ahí se ve el skyline del fondo).
+    Raycast por píxel contra cajas: cada edificio tiene fachada a la calle, cara de frente
+    (hacia la cámara) y techo. Retiros y alturas distintos dan caras escalonadas; algunos
+    tienen un piso superior retirado. Lo que no choca con nada deja ver el skyline del fondo.
     """
-    segs = {}
+    rnd = random.Random(42)
+    PAL = [(104, 112, 96), (118, 124, 106), (92, 102, 92), (128, 132, 116), (86, 96, 88), (112, 104, 92)]
+    boxes = []                                            # (lado, x0, z0, z1, alto, color, id)
     for side in (-1, 1):
-        z, lst = Z0, []
-        while z < 4000:
-            ln = random.uniform(90, 240)
-            lst.append((z, z + ln, random.uniform(HC + 8, HC + 110),
-                        np.array(random.choice([(96, 108, 92), (110, 118, 100), (84, 96, 86), (120, 128, 112), (76, 86, 80)]), float)))
-            z += ln + (random.uniform(20, 60) if random.random() < .15 else 0)   # a veces, otra bocacalle
-        segs[side] = lst
-    y0, y1 = 0, AVE_TOP + 4
-    py, px = np.mgrid[y0:y1, GX:GX + GW].astype(float)
+        z, bid = Z0, 0
+        while z < 3600:
+            ln = rnd.uniform(70, 200)
+            setback = 0 if z == Z0 else rnd.choice([0, 0, 2, 5, 9])
+            hb = rnd.choice([rnd.uniform(16, 28), rnd.uniform(HC + 10, HC + 60), rnd.uniform(HC + 30, HC + 120)])
+            col = np.array(rnd.choice(PAL), float)
+            boxes.append((side, WC + setback, z, z + ln, hb, col, (side, bid)))
+            if hb > HC + 20 and rnd.random() < .45:     # piso superior retirado
+                boxes.append((side, WC + setback + 7, z + 10, z + ln - 10, hb + rnd.uniform(10, 26), col * .94, (side, bid, 1)))
+            bid += 1
+            z += ln + (rnd.uniform(30, 70) if rnd.random() < .12 else 0)   # a veces, otra bocacalle
+
+    py, px = np.mgrid[0:AVE_TOP + 4, GX:GX + GW].astype(float)
     dx, dy = px + .5 - VPX, py + .5 - VPY
-    out = np.zeros(px.shape + (4,))
-    haze = np.array([196, 210, 186], float)
+    adx = np.abs(dx)
+    sgn = np.where(dx < 0, -1, 1)
+    best = np.full(px.shape, np.inf)
+    rgb = np.zeros(px.shape + (3,))
+    hit = np.zeros(px.shape, bool)
+
+    def put(mask, z, color):
+        m = mask & (z < best)
+        best[m] = z[m]
+        rgb[m] = color[m] if color.ndim == 3 else color
+        hit[m] = True
+
     with np.errstate(divide="ignore", invalid="ignore"):
-        zw = np.where(np.abs(dx) > 1e-6, F * WC / np.abs(dx), np.inf)
-        yw = dy * zw / F                                  # altura (hacia abajo) del punto de pared
+        # piso: calzada, cordón, vereda
         zg = np.where(dy > 1e-6, F * HC / dy, np.inf)
-        xg = dx * zg / F
-    for (iy, ix), _ in np.ndenumerate(px):
-        z_w, z_g = zw[iy, ix], zg[iy, ix]
-        side = -1 if dx[iy, ix] < 0 else 1
-        if z_g <= z_w and np.isfinite(z_g):              # piso
-            X, z = abs(xg[iy, ix]), z_g
-            if X > WR + 1.2:
-                c = np.array([150, 158, 140.])
-            elif X > WR:
-                c = np.array([190, 196, 180.])
-            else:
-                c = np.array([64, 70, 68.])
-                if X < 1.4 and (z % 50) < 24:
-                    c = np.array([210, 204, 150.])
-                if WR * .45 < X < WR * .5:
-                    c = c - 6
-        else:
-            if not np.isfinite(z_w):
-                continue
-            seg = next((sg for sg in segs[side] if sg[0] <= z_w < sg[1]), None)
-            if seg is None:
-                continue
-            zs, ze, hb, base = seg
-            fy = HC - yw[iy, ix]                           # altura sobre el piso
-            if fy > hb or fy < 0:
-                continue                                    # cielo: se ve el skyline del fondo
-            z = z_w
-            c = base * (1.0 if side < 0 else .8)
-            u = z - zs
-            if fy < 7:                                      # planta baja: vidrieras
-                c = np.array([40, 52, 48.]) if (u % 26) > 4 else c * .85
-                if 5.6 < fy < 6.4:
-                    c = np.array([150, 170, 150.])
-            elif (fy % 9) > 3 and (fy % 9) < 7.5 and (u % 16) > 5 and (u % 16) < 12:
-                c = np.array([48, 62, 56.]) if random.random() > .06 else np.array([170, 190, 160.])
-            if hb - fy < 2:
-                c = base + 26                               # cornisa
-            if u < 3:
-                c = c + 18                                  # arista entre edificios
-        t = 1 - np.exp(-(z - Z0) / 1100)
-        out[iy, ix, :3] = c * (1 - t) + haze * t
-        out[iy, ix, 3] = 255
-    return out, y0
+        X = adx * zg / F
+        g = np.zeros(px.shape + (3,)) + (64, 70, 68)
+        g[X > WR] = (190, 196, 180)
+        g[X > WR + 1.2] = (150, 158, 140)
+        dash = (X < 1.4) & ((zg % 50) < 24)
+        g[dash] = (210, 204, 150)
+        g[(X <= WR) & (X > WR - 1.5)] -= 10                   # sombra del cordón
+        put(np.isfinite(zg), zg, g)
+
+        for side, x0, z0, z1, hb, col, bid in boxes:
+            on = sgn == side
+            light = 1.06 if side < 0 else .66                 # una vereda al sol, la otra a la sombra
+            # fachada a la calle (plano X = x0)
+            zf = F * x0 / adx
+            hf = HC - dy * zf / F                             # altura sobre el piso
+            mf = on & (zf >= z0) & (zf < z1) & (hf >= 0) & (hf <= hb)
+            if mf.any():
+                u, v = zf - z0, hf
+                c = np.broadcast_to(col * light, px.shape + (3,)).copy()
+                det = np.exp(-(zf - Z0) / 900)[..., None]     # el detalle se esfuma con la distancia
+                fl, wc = v % 9, u % 12
+                win = (fl > 3) & (fl < 7.6) & (wc > 3) & (wc < 9) & (v > 8) & (v < hb - 3)
+                lit = ((np.floor(v / 9) * 7 + np.floor(u / 12) * 13 + hash(bid) % 11) % 17) == 0
+                glass = np.where(lit[..., None], [176, 196, 160], [44, 58, 54]) + (fl[..., None] - 3) * 3
+                c = np.where(win[..., None], c * (1 - det) + glass * det, c)
+                c = np.where((win & (fl > 7.0))[..., None], c * (1 - det * .4), c)        # dintel en sombra
+                sill = (fl > 2.4) & (fl <= 3) & (wc > 2.5) & (wc < 9.5) & (v > 8)
+                c = np.where(sill[..., None], c + 30 * det, c)
+                pil = (wc < 1.1)
+                c = np.where(pil[..., None], c + 10 * det, c)
+                shop = v < 7                                  # planta baja: vidrieras y puertas
+                c = np.where((shop & ((u % 26) > 4))[..., None], [38, 50, 46], c)
+                c = np.where((shop & (v > 5.8) & (v < 7))[..., None], [150, 168, 148], c)
+                c = np.where((hb - v < 1.6)[..., None], c + 34, c)                         # cornisa
+                c = np.where((u < 1.5)[..., None], c * .82, c)                             # arista
+                c = c * (.72 + .28 * np.clip(v / 40, 0, 1))[..., None]                     # oclusión a ras del piso
+                put(mf, zf, c)
+            # cara de frente (plano z = z0, mira a la cámara)
+            xf = adx * z0 / F
+            hz = HC - dy * z0 / F
+            mz = on & (xf >= x0) & (xf <= x0 + 80) & (hz >= 0) & (hz <= hb)
+            if mz.any():
+                u, v = xf - x0, hz
+                c = np.broadcast_to(col * (light * .78 if side < 0 else .86), px.shape + (3,)).copy()
+                fl, wc = v % 9, u % 10
+                win = (fl > 3) & (fl < 7.6) & (wc > 3) & (wc < 8) & (v > 8) & (v < hb - 3) & (u > 2)
+                c = np.where(win[..., None], [40, 52, 50], c)
+                c = np.where((hb - v < 1.6)[..., None], c + 30, c)
+                c = np.where((u < 1.2)[..., None], c + 26, c)                              # esquina iluminada
+                c = c * (.72 + .28 * np.clip(v / 40, 0, 1))[..., None]
+                put(mz, np.full(px.shape, z0, float), c)
+            # techo (visible solo en edificios más bajos que la cámara)
+            if hb < HC:
+                zr = np.where(dy > 1e-6, F * (HC - hb) / dy, np.inf)
+                xr = adx * zr / F
+                mr = on & (zr >= z0) & (zr < z1) & (xr >= x0) & (xr <= x0 + 80)
+                if mr.any():
+                    c = np.broadcast_to(col * 1.14, px.shape + (3,)).copy()
+                    c = np.where(((xr - x0) < 1.6)[..., None], c + 22, c)                  # parapeto
+                    c = np.where(((((zr - z0) % 40) < 6) & ((xr - x0) > 18) & ((xr - x0) < 30))[..., None], c * .7, c)  # tanques
+                    put(mr, zr, c)
+
+    t = 1 - np.exp(-np.clip(best - Z0, 0, None) / 1100)
+    haze = np.array([196, 210, 186], float)
+    out = np.zeros(px.shape + (4,))
+    out[..., :3] = np.clip(rgb * (1 - t[..., None]) + haze * t[..., None], 0, 255)
+    out[..., 3] = hit * 255
+    return out, 0
 
 
 corr, cy0 = street_corridor()
