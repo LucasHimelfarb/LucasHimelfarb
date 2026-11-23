@@ -115,40 +115,6 @@ def hexc(c):
     return "#%02x%02x%02x" % tuple(int(v) for v in c)
 
 
-# fuente 3x5 para textos chicos (HUD, cartel)
-MINI = {
- "A": ["010", "101", "111", "101", "101"], "B": ["110", "101", "110", "101", "110"],
- "C": ["011", "100", "100", "100", "011"], "D": ["110", "101", "101", "101", "110"],
- "E": ["111", "100", "110", "100", "111"], "F": ["111", "100", "110", "100", "100"],
- "G": ["011", "100", "101", "101", "011"], "H": ["101", "101", "111", "101", "101"],
- "I": ["111", "010", "010", "010", "111"], "J": ["001", "001", "001", "101", "010"],
- "K": ["101", "101", "110", "101", "101"], "L": ["100", "100", "100", "100", "111"],
- "M": ["101", "111", "111", "101", "101"], "N": ["110", "101", "101", "101", "101"],
- "O": ["010", "101", "101", "101", "010"], "P": ["110", "101", "110", "100", "100"],
- "Q": ["010", "101", "101", "110", "011"], "R": ["110", "101", "110", "101", "101"],
- "S": ["011", "100", "010", "001", "110"], "T": ["111", "010", "010", "010", "010"],
- "U": ["101", "101", "101", "101", "111"], "V": ["101", "101", "101", "101", "010"],
- "W": ["101", "101", "111", "111", "101"], "X": ["101", "101", "010", "101", "101"],
- "Y": ["101", "101", "010", "010", "010"], "Z": ["111", "001", "010", "100", "111"],
- "0": ["111", "101", "101", "101", "111"], "1": ["010", "110", "010", "010", "111"],
- "2": ["110", "001", "010", "100", "111"], "3": ["110", "001", "010", "001", "110"],
- "4": ["101", "101", "111", "001", "001"], "5": ["111", "100", "110", "001", "110"],
- "6": ["011", "100", "111", "101", "111"], "7": ["111", "001", "010", "010", "010"],
- "8": ["111", "101", "111", "101", "111"], "9": ["111", "101", "111", "001", "110"],
- " ": ["000"] * 5, ".": ["000", "000", "000", "000", "010"], ",": ["000", "000", "000", "010", "100"],
- ":": ["000", "010", "000", "010", "000"], "/": ["001", "001", "010", "100", "100"],
- ">": ["100", "010", "001", "010", "100"], "+": ["000", "010", "111", "010", "000"],
- "-": ["000", "000", "111", "000", "000"], "(": ["010", "100", "100", "100", "010"],
- ")": ["010", "001", "001", "001", "010"], "_": ["000", "000", "000", "000", "111"],
- "'": ["010", "010", "000", "000", "000"], "!": ["010", "010", "010", "000", "010"],
-}
-
-
-def mini_px(text, x0, y0):
-    return {(x0 + i * 4 + x, y0 + y) for i, ch in enumerate(text)
-            for y, r in enumerate(MINI[ch]) for x, b in enumerate(r) if b == "1"}
-
-
 yy, xx = np.mgrid[0:H, 0:W]
 HORIZON = 98
 
@@ -479,7 +445,7 @@ for i, (hi, lo) in enumerate(SCREENS):
         g[bh_ // 2 - 4:bh_ // 2 + 4, 3:bw_ - 3] = (255, 236, 200)
         for cx in range(4, bw_ - 4, 3):
             g[bh_ // 2 - 2:bh_ // 2 + 2, cx] = (90, 30, 10)
-    else:        # Limao: rodaja de lima + "IA"
+    else:        # Limao: rodaja de lima
         gy, gx = np.mgrid[0:bh_, 0:bw_]
         cy, cx = 11, bw_ / 2 - .5
         d = np.hypot(gy - cy, gx - cx)
@@ -488,11 +454,6 @@ for i, (hi, lo) in enumerate(SCREENS):
         seg = (np.abs(np.sin(ang * 3.5)) < .22) & (d < 6) & (d > 1.2)
         g[seg] = (190, 245, 90)
         g[d < 1.2] = (240, 255, 200)
-        for ch, ox in (("I", 5), ("A", 9)):
-            for ry, row in enumerate(MINI[ch]):
-                for rx, b in enumerate(row):
-                    if b == "1":
-                        g[22 + ry, ox + rx] = (225, 255, 150)
     g[::2] *= .82  # scanlines
     full = np.zeros((H, W, 4))
     full[by:by + bh_, bx:bx + bw_, :3] = posterize(g, 12, 10)
@@ -538,28 +499,6 @@ for ry in range(ROOF + 4, H, 3):            # charcos que reflejan
             near_rgb[ry, rx:rx + random.randint(2, 6)] = random.choice([(50, 26, 40), (24, 46, 56), (70, 40, 30)])
 body.append(image(rgba(near_rgb, near * 255)))
 body.append(rect(34, ROOF - 27, 1, 1, "#ff3048", ' style="animation:red 1.8s infinite steps(1)"'))
-
-# --- mate sobre el equipo de aire, con vapor
-MATE = [
-    ".....m",
-    "....m.",
-    ".yyym.",
-    "ckkkkc",
-    "cbbbbc",
-    "bbbbbb",
-    ".bbbb.",
-    "..ss..",
-]
-MPAL = {"m": "#b9c2cc", "y": "#7aa63a", "c": "#8a5a3a", "k": "#3a2418", "b": "#5c3a26", "s": "#2a1a12"}
-MX, MY = 200, ROOF - 7 - len(MATE)
-body.append("".join(f'<g fill="{c}">{runs({(MX + x, MY + y) for y, r in enumerate(MATE) for x, ch in enumerate(r) if ch == k})}</g>'
-                    for k, c in MPAL.items()))
-body.append(rect(MX, MY + 3, 1, 1, "#c08060"))                       # brillo de la ciudad en la calabaza
-css.append("@keyframes steam{0%{transform:translate(0,0);opacity:0}15%{opacity:.55}"
-           "100%{transform:translate(-3px,-12px);opacity:0}}")
-for j, (dx, dl) in enumerate([(1, 0), (3, 1.1), (2, 2.2)]):
-    body.append(f'<rect x="{MX + dx}" y="{MY + 1}" width="1" height="2" fill="#e8e4f0" opacity="0" '
-                f'style="animation:steam 3.3s {dl}s infinite steps(8)"/>')
 
 # ============================================================ 9. el personaje (tu avatar)
 cut = Image.open(ROOT / "assets" / "avatar-cutout.png").convert("RGBA")
@@ -634,48 +573,6 @@ defs.append('<radialGradient id="vig" cx=".5" cy=".5" r=".75"><stop offset=".55"
             '<stop offset="1" stop-color="#000" stop-opacity=".65"/></radialGradient>')
 body.append(rect(0, 0, W, H, "url(#vig)"))
 body.append(rect(0, 0, W, 6, "#000") + rect(0, H - 6, W, 6, "#000"))  # franjas cinemascope
-
-# ============================================================ 12. texto: nombre
-FONT = {
- "G": ["01110", "10001", "10000", "10111", "10001", "10001", "01111"],
- "H": ["10001", "10001", "10001", "11111", "10001", "10001", "10001"],
- "O": ["01110", "10001", "10001", "10001", "10001", "10001", "01110"],
- "S": ["01111", "10000", "10000", "01110", "00001", "00001", "11110"],
- "T": ["11111", "00100", "00100", "00100", "00100", "00100", "00100"],
- "D": ["11110", "10001", "10001", "10001", "10001", "10001", "11110"],
- "E": ["11111", "10000", "10000", "11110", "10000", "10000", "11111"],
- "C": ["01110", "10001", "10000", "10000", "10000", "10001", "01110"],
- "L": ["10000", "10000", "10000", "10000", "10000", "10000", "11111"],
- "U": ["10001", "10001", "10001", "10001", "10001", "10001", "01110"],
- "A": ["01110", "10001", "10001", "11111", "10001", "10001", "10001"],
- "I": ["01110", "00100", "00100", "00100", "00100", "00100", "01110"],
- "M": ["10001", "11011", "10101", "10101", "10001", "10001", "10001"],
- "F": ["11111", "10000", "10000", "11110", "10000", "10000", "10000"],
- "R": ["11110", "10001", "10001", "11110", "10100", "10010", "10001"],
- "B": ["11110", "10001", "10001", "11110", "10001", "10001", "11110"],
- " ": ["00000"] * 7,
-}
-TEXT, TX, TY, TC = "LUCAS HIMELFARB", 12, 14, "#d8f6f0"
-TCYC = 30  # ciclo del nombre
-css.append(f"@keyframes bl{{0%,49%{{opacity:1}}50%,100%{{opacity:0}}}}"
-           f"@keyframes tglitch{{0%,62%,64%,100%{{transform:translateX(0)}}62.5%{{transform:translateX(2px)}}63.2%{{transform:translateX(-1px)}}}}")
-chars = []
-for i, ch in enumerate(TEXT):
-    px = {(TX + i * 6 + x, TY + y) for y, r in enumerate(FONT[ch]) for x, b in enumerate(r) if b == "1"}
-    if not px:
-        continue
-    on = (.4 + i * .17) / TCYC * 100
-    k = f"t{i}"
-    css.append(f"@keyframes {k}{{0%,{on:.2f}%{{opacity:0}}{on + .1:.2f}%,98.5%{{opacity:1}}98.6%,100%{{opacity:0}}}}")
-    chars.append(f'<g style="animation:{k} {TCYC}s infinite">'
-                 f'<g fill="#000" opacity=".6">{runs({(x + 1, y + 1) for x, y in px})}</g>'
-                 f'<g fill="{TC}">{runs(px)}</g></g>')
-body.append(f'<g style="animation:tglitch {TCYC}s infinite steps(1)">{"".join(chars)}</g>')
-# indicador + subrayado fino
-body.append(rect(TX - 6, TY + 2, 3, 3, "#ff3048", ' style="animation:bl 1.2s infinite steps(1)"'))
-css.append(f"@keyframes uline{{0%,9%{{transform:scaleX(0)}}12%,98.5%{{transform:scaleX(1)}}98.6%,100%{{transform:scaleX(0)}}}}")
-body.append(f'<rect x="{TX}" y="{TY + 10}" width="{len(TEXT) * 6 - 1}" height="1" fill="{TC}" opacity=".45" '
-            f'style="transform-origin:{TX}px 0;animation:uline {TCYC}s infinite"/>')
 
 # ============================================================ salida
 svg = (f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {W} {H}" width="{OUT_W}" height="{OUT_H}" '
