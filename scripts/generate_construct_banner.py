@@ -2328,7 +2328,7 @@ def stamp_head(im, kind, neck_x, neck_y):
                     px_[X_, Y_] = pal[ch] + (255,)
 
 
-def hero(kind, H_, phase=0.0, amp=.36, facing_right=False):
+def hero(kind, H_, phase=0.0, amp=.36, facing_right=False, arms_back=0.0):
     """Claude (Morpheus) o Lucas (Neo) de perfil, caminando hacia la izquierda. Dibujado a 4x y reducido."""
     st = HERO_STYLE[kind]
     S_ = 4
@@ -2377,8 +2377,10 @@ def hero(kind, H_, phase=0.0, amp=.36, facing_right=False):
     def arm(alpha, col, hi, skin_c):
         sx, sy = XL(.005, .205), Yd(.205)
         up_l, fo_l = .165 * Hs, .15 * Hs
+        kb = arms_back
+        alpha = alpha * (1 - kb) - .5 * kb                     # el brazo se lleva hacia atrás
         ex, ey = sx - up_l * np.sin(alpha), sy + up_l * np.cos(alpha)
-        beta = alpha + .3
+        beta = (alpha + .3) * (1 - kb) + (-.12) * kb           # el antebrazo baja: manos tomadas en la espalda
         hx_, hy_ = ex - fo_l * np.sin(beta), ey + fo_l * np.cos(beta)
         _seg(d, (sx, sy), (ex, ey), .085 * Hs, .07 * Hs, col)
         _seg(d, (ex, ey), (hx_, hy_), .07 * Hs, .06 * Hs, col)
@@ -2458,11 +2460,22 @@ def hero(kind, H_, phase=0.0, amp=.36, facing_right=False):
     return out
 
 
-def protagonist(frames, idle, ox, cyc, delay=0.0):
+def protagonist(frames, idle, ox, cyc, delay=0.0, idle_seq=None):
     walk = "".join(f'<g opacity="{1 if i == 0 else 0}" style="animation:wk{i} {cyc:.3f}s {delay:.3f}s infinite steps(1)">'
                    f'{image(f, ox, FEET - f.height + 1, up=1)}</g>' for i, f in enumerate(frames))
-    return (f'<g style="{WALK_VIS}">{walk}</g>'
-            f'<g opacity="0" style="{FRZ_VIS}">{image(idle, ox, FEET - idle.height + 1, up=1)}</g>')
+    if not idle_seq:
+        return (f'<g style="{WALK_VIS}">{walk}</g>'
+                f'<g opacity="0" style="{FRZ_VIS}">{image(idle, ox, FEET - idle.height + 1, up=1)}</g>')
+    seq = ""
+    for (t0, t1), im_ in idle_seq:                        # secuencia de poses durante el final
+        seq += f'<g opacity="0" style="{window(t0, t1)}">{image(im_, ox, FEET - im_.height + 1, up=1)}</g>'
+    return f'<g style="{WALK_VIS}">{walk}</g>{seq}'
+
+
+# Final (fondo negro con lluvia de código): Claude se para de frente y lleva las manos a la espalda;
+# Lucas se da vuelta y camina hacia él hasta quedar enfrentados.
+ARMS0, ARMS1 = F0 + .9, F0 + 2.1                          # Claude lleva los brazos atrás
+L_TURN, L_ARRIVE = F0 + 1.3, F0 + 4.3                     # Lucas se da vuelta / llega frente a Claude
 
 
 # Cada uno con su andar (los dos a la velocidad de la cámara, sin patinar): Claude un poco más alto, con
@@ -2472,6 +2485,7 @@ A_c, cyc_c = gait_params(PH_C, NEAR_SPEED, cadence=1.3, amax=.5)
 A_p, cyc_p = gait_params(PH, NEAR_SPEED, cadence=1.0, amax=.5)
 cl = walk_frames(lambda ph, a: hero("morpheus", PH_C, ph, a), A_c)
 cl_idle = hero("morpheus", PH_C, 0.0, .04, facing_right=True)
+cl_back = [hero("morpheus", PH_C, 0.0, .04, facing_right=True, arms_back=k) for k in (.25, .5, .75, 1.0)]
 lu = walk_frames(lambda ph, a: hero("neo", PH, ph, a), A_p)
 lu_idle = hero("neo", PH, 0.0, .04)
 CLX, LUX = 98, 146
@@ -2512,7 +2526,11 @@ body.append(f'<g opacity="0" style="animation:rainvis {T}s infinite linear">{"".
 
 HERO_START = len(body)
 body.append(f'<ellipse cx="{CLX + cl[0].width / 2}" cy="{FEET}" rx="8" ry="1.6" fill="#000" opacity=".22"/>')
-body.append(protagonist(cl, cl_idle, CLX, cyc_c))
+_steps = np.linspace(ARMS0, ARMS1, len(cl_back) + 1)
+cl_seq = [((F0, ARMS0), cl_idle)] + [((a_, b_), im_) for a_, b_, im_ in zip(_steps, _steps[1:], cl_back[:-1])] \
+    + [((_steps[-2], T), cl_back[-1])]
+cl_seq[-2] = ((cl_seq[-2][0][0], _steps[-2]), cl_seq[-2][1])
+body.append(protagonist(cl, cl_idle, CLX, cyc_c, idle_seq=cl_seq))
 
 # ------------------------------------------------ Lucas se queda de pie, distraído con la mujer de rojo
 # Camina junto a Claude; al verla venir de frente se frena (queda quieto en el mundo, así que la cámara,
@@ -2525,11 +2543,20 @@ T_TURN = (LUX - WX0 + WV * APPEAR - NEAR_SPEED * T_STOP) / (WV - NEAR_SPEED)
 LAG = NEAR_SPEED * (F0 - T_STOP)                         # cuánto queda atrás al congelarse
 lu_stand_l = hero("neo", PH, 0.0, .04)                   # parado mirándola venir
 lu_stand_r = hero("neo", PH, 0.0, .04, facing_right=True)   # se da vuelta y la sigue con la mirada
-css.append(f"@keyframes lucx{{0%,{pct(T_STOP):.3f}%{{transform:translateX(0)}}{pct(F0):.3f}%,100%"
-           f"{{transform:translateX({LAG:.2f}px)}}}}")
+GAP = 7                                                  # distancia final entre los dos (px)
+TARGET = CLX + cl_idle.width + GAP - (LUX + (lu_stand_l.width - lu_stand_l.width))   # borde izq. de Lucas al llegar
+TARGET = TARGET - LUX * 0                                # (desplazamiento relativo a LUX)
+D_APPROACH = TARGET - (LUX + LAG) + LUX - LUX            # (negativo: camina hacia la izquierda)
+D_APPROACH = (CLX + cl_idle.width + GAP) - (LUX + LAG)
+A_ap, cyc_ap = gait_params(PH, abs(D_APPROACH) / (L_ARRIVE - L_TURN - .2), cadence=1.0, amax=.5)
+lu_approach = walk_frames(lambda ph, a: hero("neo", PH, ph, a), A_ap)
+css.append(f"@keyframes lucx{{0%,{pct(T_STOP):.3f}%{{transform:translateX(0)}}{pct(F0):.3f}%,{pct(L_TURN + .2):.3f}%"
+           f"{{transform:translateX({LAG:.2f}px)}}{pct(L_ARRIVE):.3f}%,100%{{transform:translateX({LAG + D_APPROACH:.2f}px)}}}}")
 css.append(f"@keyframes lwalk{{0%,{pct(T_STOP) - .001:.3f}%{{opacity:1}}{pct(T_STOP):.3f}%,100%{{opacity:0}}}}")
 lstand_l = window(T_STOP, T_TURN)
-lstand_r = window(T_TURN, F1)
+lstand_r = window(T_TURN, L_TURN)
+lapproach = window(L_TURN, L_ARRIVE)
+lface = window(L_ARRIVE, T)
 
 
 def frames_svg(frames, cyc, delay=0.0):
@@ -2541,6 +2568,8 @@ lucas_svg = (f'<ellipse cx="{LUX + lu[0].width / 2}" cy="{FEET}" rx="8" ry="1.6"
              f'<g style="animation:lwalk {T}s infinite linear">{frames_svg(lu, cyc_p, -cyc_p * .4)}</g>'
              f'<g opacity="0" style="{lstand_l}">{image(lu_stand_l, LUX, FEET - lu_stand_l.height + 1, up=1)}</g>'
              f'<g opacity="0" style="{lstand_r}">{image(lu_stand_r, LUX, FEET - lu_stand_r.height + 1, up=1)}</g>'
+             f'<g opacity="0" style="{lapproach}">{frames_svg(lu_approach, cyc_ap)}</g>'
+             f'<g opacity="0" style="{lface}">{image(lu_stand_l, LUX, FEET - lu_stand_l.height + 1, up=1)}</g>'
              )
 body.append(f'<g style="animation:lucx {T}s infinite linear">{lucas_svg}</g>')
 body[HERO_START:] = [f'<g opacity="0" style="animation:heroio {T}s infinite linear">{"".join(body[HERO_START:])}</g>']
