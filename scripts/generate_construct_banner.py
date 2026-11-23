@@ -231,7 +231,7 @@ BRICKS = [(150, 84, 66), (128, 74, 60), (110, 70, 58), (176, 150, 116), (164, 13
 CANOPY = [(40, 70, 52), (110, 36, 40), (30, 40, 70), (24, 26, 28)]
 
 
-def facade(u, v, hb, base, aw, det, bid, kind="shop", corner_edge=False):
+def facade(u, v, hb, base, aw, det, bid, kind="shop", corner_edge=False, width=None):
     """Fachada de un barrio de Nueva York de los 2000, a escala real, común a toda la ciudad.
 
     u: posición horizontal sobre la cara, v: altura sobre el piso, hb: altura del edificio.
@@ -339,9 +339,124 @@ def facade(u, v, hb, base, aw, det, bid, kind="shop", corner_edge=False):
     cor = (d < 5) & (d >= 0)
     c = np.where(cor[..., None], c * (1 - det) + trim * 1.08 * det, c)
     c = np.where((cor & (d > 1.5) & (d < 2.8) & ((u % 2.4) < 1.1))[..., None], c - 30 * det, c)
+    if kind.startswith("billboard"):
+        design = {"billboard_soda": 0, "billboard_lime": 1, "billboard_fashion": 2}.get(kind, hsh % 3)
+        c = billboard(c, u, v, det, design, width)
+    elif kind == "grand":
+        c = grand_entrance(c, u, v, det, base, width)
     if corner_edge:
         c = np.where((u < 1.2)[..., None], c + 14, c)   # arista de la esquina
     return np.clip(c, 0, 255)
+
+
+def billboard(c, u, v, det, design, width):
+    """Cartel publicitario gigante sobre los pisos altos (gráfica sin texto) con reflectores abajo."""
+    W_ = width if width else 60.0
+    u_ = u if width else u % 60
+    u0, u1, v0, v1 = 3.0, W_ - 3.0, G_FLOOR + 3, G_FLOOR + 70
+    pu, pv = (u_ - u0) / (u1 - u0), (v - v0) / 26.0                 # pv: 0..1 en la parte visible
+    inside = (u_ >= u0) & (u_ < u1) & (v >= v0) & (v < v1)
+    border = inside & ((u_ - u0 < 1.5) | (u1 - u_ < 1.5) | (v - v0 < 1.5))
+    g_ = np.zeros(u.shape + (3,))
+    if design == 0:                                                  # gaseosa: ola blanca y una lata
+        g_[:] = (196, 30, 40)
+        g_ = np.where((pv > .55)[..., None], [170, 22, 34], g_)
+        wave = np.abs(pv - (.45 + .14 * np.sin(pu * 7))) < .09
+        g_ = np.where(wave[..., None], [244, 240, 236], g_)
+        can = (pu > .66) & (pu < .86) & (pv > .08) & (pv < .95)
+        g_ = np.where(can[..., None], [214, 30, 44], g_)
+        g_ = np.where((can & (pu > .69) & (pu < .72))[..., None], [250, 200, 200], g_)
+        g_ = np.where((can & (pv > .38) & (pv < .5))[..., None], [240, 236, 232], g_)
+        g_ = np.where(((pu > .66) & (pu < .86) & (pv >= .95) & (pv < 1.05))[..., None], [196, 198, 202], g_)
+    elif design == 1:                                                # lima en rodaja (guiño a Limao)
+        g_[:] = np.stack([226 - pv * 40, 220 - pv * 10, 70 + pv * 10], -1)
+        cx, cy = .32 * (u1 - u0), .55 * 26.0
+        du, dv = (u_ - u0) - cx, (v - v0) - cy
+        r = np.hypot(du, dv)
+        ang = np.arctan2(dv, du)
+        R = 11.5
+        g_ = np.where((r < R)[..., None], [60, 140, 40], g_)
+        g_ = np.where((r < R - 1.6)[..., None], [196, 236, 110], g_)
+        g_ = np.where(((r < R - 2.6) & (np.abs(np.sin(ang * 4)) > .2))[..., None], [226, 250, 150], g_)
+        g_ = np.where((r < 1.4)[..., None], [240, 255, 210], g_)
+        stripe = (pu > .62) & (pu < .92) & (((pv * 5) % 1) < .35) & (pv > .15) & (pv < .85)
+        g_ = np.where(stripe[..., None], [60, 120, 40], g_)
+    else:                                                            # moda: perfil sobre fondo oscuro
+        g_[:] = (34, 34, 46)
+        g_ = np.where((np.abs(pu - pv * .5 - .45) < .05)[..., None], [214, 90, 140], g_)
+        hx, hy = .3 * (u1 - u0), .5 * 26.0
+        du, dv = (u_ - u0) - hx, (v - v0) - hy
+        head = (du / 7) ** 2 + (dv / 8.5) ** 2 < 1
+        g_ = np.where(head[..., None], [226, 196, 170], g_)
+        hair = ((du + 1.5) / 8) ** 2 + ((dv - 2) / 8.5) ** 2 < 1
+        g_ = np.where((hair & ~head)[..., None] | (hair & (du > 2))[..., None], [28, 22, 26], g_)
+        g_ = np.where(((np.hypot(du - 22, dv) > 6.5) & (np.hypot(du - 22, dv) < 8))[..., None], [220, 186, 90], g_)
+    g_ = np.where(border[..., None], [30, 32, 34], g_)
+    c = np.where(inside[..., None], c * (1 - det) + g_ * det, c)
+    # reflectores bajo el cartel
+    lamp = (v >= v0 - 3) & (v < v0) & ((((u_ - u0) % 14) < 1.2) | ((((u_ - u0) % 14) < 3) & (v >= v0 - 1)))
+    lamp = lamp & (u_ >= u0) & (u_ < u1)
+    c = np.where(lamp[..., None], c * (1 - det) + np.array([40, 42, 44]) * det, c)
+    return c
+
+
+def grand_entrance(c, u, v, det, base, width):
+    """Entrada monumental Beaux-Arts: columnas acanaladas, entablamento, puerta en arco de bronce."""
+    W_ = width if width else 40.0
+    u_ = u if width else u % 40
+    uc = W_ / 2
+    stone = np.array([226, 222, 210], float)                    # siempre piedra clara
+    zone = v < 60
+    sc = np.broadcast_to(stone, u.shape + (3,)).copy()
+    sc = np.where((((v % 6) < .6) | ((((u_ + (np.floor(v / 6) % 2) * 5) % 10) < .5)))[..., None], sc - 14, sc)
+    steps = v < 3.4
+    sc = np.where(steps[..., None], stone * (1 - .06 * np.floor(v))[..., None] + ((v % 1.15) < .35)[..., None] * -30, sc)
+    DW = 9.0
+    du = u_ - uc
+    # puerta en arco
+    arch_r = np.hypot(du, v - 30)
+    opening = ((np.abs(du) < DW) & (v >= 3.4) & (v < 30)) | ((arch_r < DW) & (v >= 30))
+    ring = ((np.abs(du) < DW + 2) & (v >= 3.4) & (v < 30) & ~opening) | ((arch_r < DW + 2) & (arch_r >= DW) & (v >= 30))
+    sc = np.where(ring[..., None], stone + 18, sc)
+    sc = np.where(((np.abs(du) < 1.6) & (arch_r >= DW - .5) & (arch_r < DW + 2.6) & (v > 36))[..., None], stone + 30, sc)  # clave
+    bronze = np.zeros(u.shape + (3,)) + (146, 104, 50)
+    panel = ((((v - 3.4) % 8.6) > 1.6) & (((v - 3.4) % 8.6) < 7.2)) & (np.abs(du) > 1.4) & (np.abs(du) < DW - 1.4)
+    bronze = np.where(panel[..., None], [112, 78, 38], bronze)
+    bronze = np.where((np.abs(du) < .5)[..., None], [70, 50, 26], bronze)
+    bronze = np.where(((np.abs(du) > .6) & (np.abs(du) < 1.8) & (v > 14) & (v < 18))[..., None], [236, 200, 96], bronze)  # manijas
+    fan = (v >= 26) & opening
+    ang = np.arctan2(v - 30, du)
+    fanc = np.where(((((ang / np.pi) * 9) % 1) < .18)[..., None] | ((arch_r < 2.4) & (v >= 30))[..., None],
+                    [90, 70, 40], [226, 204, 140])
+    fanc = np.where((np.abs(v - 26.5) < .6)[..., None], [90, 70, 40], fanc)
+    door_c = np.where(fan[..., None], fanc, bronze)
+    sc = np.where(opening[..., None], door_c, sc)
+    # columnas acanaladas con base y capitel
+    for off in (DW + 7, DW + 19):
+        for sgn_ in (-1, 1):
+            cx_ = uc + sgn_ * off
+            if cx_ < 3 or cx_ > W_ - 3:
+                continue
+            dx_ = u_ - cx_
+            shaft = (np.abs(dx_) < 2.6) & (v >= 5.4) & (v < 46)
+            col_c = np.where((((dx_ + 2.6) % 1.3) < .4)[..., None], stone - 26, stone + 10)
+            col_c = col_c + (dx_ < -1.2)[..., None] * 14 - (dx_ > 1.4)[..., None] * 22                  # volumen
+            sc = np.where(shaft[..., None], col_c, sc)
+            sc = np.where(((np.abs(dx_) < 3.6) & (v >= 3.4) & (v < 5.4))[..., None], stone + 6, sc)       # base
+            sc = np.where(((np.abs(dx_) < 3.8) & (v >= 46) & (v < 50))[..., None], stone + 20, sc)       # capitel
+            sc = np.where(((np.abs(np.abs(dx_) - 3) < .7) & (v >= 47) & (v < 49))[..., None], stone - 40, sc)  # volutas
+    # faroles a los lados de la puerta
+    for sgn_ in (-1, 1):
+        lx_ = uc + sgn_ * (DW + 3.6)
+        lam = (np.abs(u_ - lx_) < 1.3) & (v >= 22) & (v < 27)
+        sc = np.where(lam[..., None], [236, 210, 140], sc)
+        sc = np.where(((np.abs(u_ - lx_) < 1.6) & ((np.abs(v - 21.6) < .5) | (np.abs(v - 27.3) < .5)))[..., None], [30, 30, 32], sc)
+    # entablamento: arquitrabe, friso con triglifos y cornisa con dentículos
+    sc = np.where(((v >= 50) & (v < 52))[..., None], stone + 14, sc)
+    sc = np.where(((v >= 52) & (v < 56) & ((u_ % 5) < 1.2))[..., None], stone - 24, sc)
+    sc = np.where(((v >= 56) & (v < 58.5))[..., None], stone + 24, sc)
+    sc = np.where(((v >= 56.6) & (v < 57.6) & ((u_ % 2.2) < 1))[..., None], stone - 30, sc)
+    return np.where(zone[..., None], c * (1 - det) + sc * det, c)
 
 
 # ============================================================ vehículos (dibujados a 4x y reducidos)
@@ -490,6 +605,7 @@ near = np.zeros((H, TW, 4))
 AVE_TOP = 74                                                          # base de los edificios (vereda de enfrente)
 x = 0
 # piedra caliza clara, como los monumentos de Washington DC
+KIND_OVERRIDE = {0: "grand", 1: "billboard_soda", 5: "grand", 7: "billboard_lime"}   # índices de edificios de frente
 FRONT_PAL = [(206, 204, 196), (196, 196, 190), (216, 213, 204), (188, 190, 184), (224, 221, 212), (200, 198, 188)]
 AWN = [(52, 104, 74), (128, 120, 92), (70, 80, 76), (120, 60, 56)]
 blds = []                                                             # (x, ancho, techo, color, toldo, tipo)
@@ -502,7 +618,9 @@ while x < W:
     kind = "lobby" if random.random() < .45 else "shop"
     aw = np.array(random.choice(AWN), float) if kind == "shop" and random.random() < .7 else None
     yy_, xx_ = np.mgrid[0:AVE_TOP, x:min(TW, x + bw)].astype(float)
-    face = facade(xx_ - x + .5 - (bw % 40) / 2, AVE_TOP - yy_ - .5, AVE_TOP - top, c, aw, 1.0, ("f", fi), kind)
+    kind = KIND_OVERRIDE.get(fi, kind)
+    u_f = xx_ - x + .5 if kind == "grand" or kind.startswith("billboard") else xx_ - x + .5 - (bw % 40) / 2
+    face = facade(u_f, AVE_TOP - yy_ - .5, AVE_TOP - top, c, aw, 1.0, ("f", fi), kind, width=bw)
     near[0:AVE_TOP, x:x + bw, :3] = face
     near[0:AVE_TOP, x:x + bw, 3] = 255
     near[0:AVE_TOP, x:x + 1, :3] = np.clip(c + 14, 0, 255)            # juntas entre edificios
@@ -522,7 +640,9 @@ while x < TW:
     kind = "lobby" if random.random() < .45 else "shop"
     aw = np.array(random.choice(AWN), float) if kind == "shop" and random.random() < .7 else None
     yy_, xx_ = np.mgrid[0:AVE_TOP, x:min(TW, x + bw)].astype(float)
-    face = facade(xx_ - x + .5 - (bw % 40) / 2, AVE_TOP - yy_ - .5, AVE_TOP - top, c, aw, 1.0, ("f", fi), kind)
+    kind = KIND_OVERRIDE.get(fi, kind)
+    u_f = xx_ - x + .5 if kind == "grand" or kind.startswith("billboard") else xx_ - x + .5 - (bw % 40) / 2
+    face = facade(u_f, AVE_TOP - yy_ - .5, AVE_TOP - top, c, aw, 1.0, ("f", fi), kind, width=bw)
     near[0:AVE_TOP, x:x + bw, :3] = face
     near[0:AVE_TOP, x:x + bw, 3] = 255
     near[0:AVE_TOP, x:x + 1, :3] = np.clip(c + 14, 0, 255)
