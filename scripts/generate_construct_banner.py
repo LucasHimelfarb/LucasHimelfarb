@@ -1413,14 +1413,14 @@ for i_ in range(GAIT_N):
                if i_ else f"@keyframes wk0{{0%,{a1_ - .01:.2f}%{{opacity:1}}{a1_:.2f}%,100%{{opacity:0}}}}")
 
 
-def gait_params(h, world_speed, cadence=1.1):
+def gait_params(h, world_speed, cadence=1.1, amax=.42):
     """Amplitud de cadera y duración del ciclo para que el pie de apoyo no patine.
 
     world_speed en px/s a la escala de la figura. Ciclo = dos pasos; paso = 2 * pierna * sin(A).
     """
     legL = (h - 1 - .6 * h / 24) - 12.5 * h / 24
     step = max(1e-3, abs(world_speed)) * cadence / 2
-    A = float(np.clip(np.arcsin(min(.99, step / (2 * legL))), .12, .42))
+    A = float(np.clip(np.arcsin(min(.99, step / (2 * legL))), .12, amax))
     cyc = 2 * (2 * legL * np.sin(A)) / max(1e-3, abs(world_speed))
     return A, float(np.clip(cyc, .7, 2.2))
 
@@ -2001,10 +2001,12 @@ PH = round(PERSP_K * (FEET - HORIZON))                  # misma regla que el res
 HERO_STYLE = {
     "neo": dict(coat=(16, 16, 19), coat_hi=(96, 98, 110), inner=(40, 40, 46), inner_hi=(60, 60, 68), pants=(16, 16, 18),
                 boot=(14, 14, 16), boot_hi=(60, 60, 66), skin=(212, 166, 134), skin_sh=(170, 124, 98),
-                hair=(56, 38, 26), hair_hi=(92, 66, 46), flare=.05, hem=.92, collar="mao", buttons=False),
+                hair=(56, 38, 26), hair_hi=(92, 66, 46), flare=.05, hem=.92, collar="mao", buttons=False,
+                lean=.075, arm=.5),                                   # decidido: inclinado hacia adelante
     "morpheus": dict(coat=(18, 22, 20), coat_hi=(88, 104, 96), inner=(96, 30, 42), inner_hi=(140, 52, 64),
                      pants=(34, 30, 28), boot=(54, 36, 26), boot_hi=(100, 72, 54), skin=(217, 119, 87),
-                     skin_sh=(176, 88, 62), hair=None, hair_hi=None, flare=.08, hem=.93, collar="lapel", buttons=True),
+                     skin_sh=(176, 88, 62), hair=None, hair_hi=None, flare=.08, hem=.93, collar="lapel", buttons=True,
+                     lean=.02, arm=.28),                              # erguido y solemne
 }
 
 
@@ -2145,29 +2147,11 @@ def hero(kind, H_, phase=0.0, amp=.36, facing_right=False):
         d.line([(ax - .12 * Hs, ay + .045 * Hs + toe), (ax + .04 * Hs, ay + .045 * Hs)], fill=(58, 58, 60), width=int(.016 * Hs))
         d.line([(ax - .09 * Hs, ay - .005 * Hs + toe * .6), (ax - .02 * Hs, ay - .028 * Hs)], fill=bh, width=max(1, int(.008 * Hs)))
 
-    def flap(i, col, hi):
-        """Faldón del tapado que acompaña a la pierna i (los tapados de Matrix se abren al caminar)."""
-        (kx, ky), (ax, ay), t, k = pts[i]
-        hem_y = Yd(st["hem"])
-        u_ = (hem_y - ky) / max(1e-6, ay - ky)
-        hx_ = kx + (ax - kx) * float(np.clip(u_, 0, 1)) if hem_y > ky else cx - (hem_y - hip_y) * np.tan(t)
-        fl = st["flare"] * Hs
-        trail = (.05 + .04 * (1 - np.cos(t))) * Hs                                   # la capa se arrastra hacia atrás
-        poly = [(X(-.085), Yd(.43)), (X(.085), Yd(.43)), (hx_ + .07 * Hs + fl + trail, hem_y - .01 * Hs),
-                (hx_ - .07 * Hs - fl * .5, hem_y + .01 * Hs)]
-        _poly(d, poly, col)
-        d.line([poly[3], poly[0]], fill=hi, width=max(1, int(.012 * Hs)))          # canto iluminado
-        for f_ in (.35, .62):                                                         # reflejos del cuero
-            p0_ = (poly[0][0] + (poly[1][0] - poly[0][0]) * f_, poly[0][1])
-            p1_ = (poly[3][0] + (poly[2][0] - poly[3][0]) * f_, poly[3][1])
-            d.line([(p0_[0] + (p1_[0] - p0_[0]) * .15, p0_[1] + (p1_[1] - p0_[1]) * .15),
-                    (p0_[0] + (p1_[0] - p0_[0]) * .7, p0_[1] + (p1_[1] - p0_[1]) * .7)],
-                   fill=dark(hi, .62), width=max(1, int(.01 * Hs)))
-        d.line([(hx_ - .07 * Hs - fl * .6, hem_y + .005 * Hs), (hx_ + .065 * Hs + fl, hem_y)], fill=dark(col, .75),
-               width=max(1, int(.01 * Hs)))                                         # dobladillo
+    lean = st["lean"]
+    XL = lambda f, yf: X(f) - (.52 - yf) * Hs * np.tan(lean)  # el torso se inclina como bloque desde la cadera
 
     def arm(alpha, col, hi, skin_c):
-        sx, sy = X(.005), Yd(.205)
+        sx, sy = XL(.005, .205), Yd(.205)
         up_l, fo_l = .165 * Hs, .15 * Hs
         ex, ey = sx - up_l * np.sin(alpha), sy + up_l * np.cos(alpha)
         beta = alpha + .3
@@ -2178,44 +2162,67 @@ def hero(kind, H_, phase=0.0, amp=.36, facing_right=False):
         d.ellipse([hx_ - .028 * Hs, hy_ - .01 * Hs, hx_ + .028 * Hs, hy_ + .05 * Hs], fill=skin_c)   # mano
 
     coat, coat_hi = st["coat"], st["coat_hi"]
-    a_near = -legs[0][0] * .5
-    # orden: brazo lejano, pierna lejana, faldón lejano, pierna cercana, torso, faldón cercano, brazo cercano, cabeza
+    a_near = -legs[0][0] * st["arm"]
+    hem_y = Yd(st["hem"])
+    ank = [pts[0][1][0], pts[1][1][0]]
+    front = 0 if ank[0] < ank[1] else 1                       # la pierna que va adelante (x menor)
+    back = 1 - front
+    shade = {0: 1.0, 1: .72}                                  # 0 = pierna cercana, 1 = lejana
+    # brazo lejano y pierna de atrás (queda dentro del tapado)
     arm(-a_near, dark(coat, .6), dark(coat_hi, .6), st["skin_sh"])
-    leg(1, .72)
-    flap(1, dark(coat, .78), dark(coat_hi, .7))
-    leg(0, 1.0)
-    # torso del tapado (pecho adelante, espalda recta)
-    torso = [(X(-.035), Yd(.165)), (X(.06), Yd(.175)), (X(.085), Yd(.25)), (X(.08), Yd(.45)),
-             (X(-.085), Yd(.45)), (X(-.1), Yd(.3)), (X(-.09), Yd(.22))]
+    leg(back, shade[back])
+    # el tapado: una sola pieza que cae detrás de la pierna trasera y se arrastra como capa
+    fl = st["flare"] * Hs
+    trail = (.06 + .03 * np.sin(2 * np.pi * phase) ** 2) * Hs
+    hem_front_x = (ank[front] + ank[back]) / 2 + .015 * Hs
+    skirt = [(XL(-.07, .43), Yd(.43)), (XL(.085, .43), Yd(.43)), (ank[back] + .07 * Hs + fl + trail, hem_y - .012 * Hs),
+             (hem_front_x, hem_y + .008 * Hs)]
+    _poly(d, skirt, coat)
+    for f_ in (.3, .55, .78):                                 # reflejos alargados del cuero
+        p0_ = (skirt[0][0] + (skirt[1][0] - skirt[0][0]) * f_, skirt[0][1])
+        p1_ = (skirt[3][0] + (skirt[2][0] - skirt[3][0]) * f_, skirt[3][1])
+        d.line([(p0_[0] + (p1_[0] - p0_[0]) * .1, p0_[1] + (p1_[1] - p0_[1]) * .1),
+                (p0_[0] + (p1_[0] - p0_[0]) * .75, p0_[1] + (p1_[1] - p0_[1]) * .75)],
+               fill=dark(coat_hi, .5 if f_ != .55 else .7), width=max(1, int(.01 * Hs)))
+    d.line([skirt[3], skirt[2]], fill=dark(coat, .7), width=max(1, int(.01 * Hs)))          # ruedo
+    d.line([skirt[0], skirt[3]], fill=dark(coat_hi, .8), width=max(1, int(.01 * Hs)))       # canto de la abertura
+    # la pierna que avanza sale por la abertura del tapado
+    leg(front, shade[front])
+    torso = [(XL(-.035, .165), Yd(.165)), (XL(.06, .175), Yd(.175)), (XL(.085, .25), Yd(.25)), (XL(.08, .45), Yd(.45)),
+             (XL(-.085, .45), Yd(.45)), (XL(-.1, .3), Yd(.3)), (XL(-.09, .22), Yd(.22))]
     _poly(d, torso, coat)
-    d.line([(X(.075), Yd(.2)), (X(.075), Yd(.44))], fill=dark(coat, .7), width=max(1, int(.016 * Hs)))    # sombra de espalda
-    d.line([(X(.035), Yd(.2)), (X(.045), Yd(.42))], fill=dark(coat_hi, .55), width=max(1, int(.01 * Hs)))  # reflejo del cuero
-    # prenda interior que se ve por la abertura del tapado
-    inner = [(X(-.07), Yd(.17)), (X(-.03), Yd(.17)), (X(-.045), Yd(.44)), (X(-.085), Yd(.44)), (X(-.095), Yd(.28))]
+    d.line([(XL(.075, .2), Yd(.2)), (XL(.075, .44), Yd(.44))], fill=dark(coat, .7), width=max(1, int(.016 * Hs)))
+    d.line([(XL(.035, .2), Yd(.2)), (XL(.045, .42), Yd(.42))], fill=dark(coat_hi, .55), width=max(1, int(.01 * Hs)))
+    inner = [(XL(-.07, .17), Yd(.17)), (XL(-.03, .17), Yd(.17)), (XL(-.045, .44), Yd(.44)), (XL(-.085, .44), Yd(.44)),
+             (XL(-.095, .28), Yd(.28))]
     _poly(d, inner, st["inner"])
-    d.line([(X(-.088), Yd(.24)), (X(-.083), Yd(.42))], fill=st["inner_hi"], width=max(1, int(.012 * Hs)))
+    d.line([(XL(-.088, .24), Yd(.24)), (XL(-.083, .42), Yd(.42))], fill=st["inner_hi"], width=max(1, int(.012 * Hs)))
     if kind == "morpheus":                                                            # chaleco con botones y camisa
         for yy in (.27, .32, .37, .42):
-            d.ellipse([X(-.072) - .008 * Hs, Yd(yy) - .008 * Hs, X(-.072) + .008 * Hs, Yd(yy) + .008 * Hs], fill=(206, 172, 96))
-        _poly(d, [(X(-.07), Yd(.17)), (X(-.035), Yd(.17)), (X(-.055), Yd(.24))], (40, 44, 46))
+            d.ellipse([XL(-.072, yy) - .008 * Hs, Yd(yy) - .008 * Hs, XL(-.072, yy) + .008 * Hs, Yd(yy) + .008 * Hs],
+                      fill=(206, 172, 96))
+        _poly(d, [(XL(-.07, .17), Yd(.17)), (XL(-.035, .17), Yd(.17)), (XL(-.055, .24), Yd(.24))], (40, 44, 46))
     else:                                                                             # suéter: tejido
         for yy in np.arange(.2, .44, .035):
-            d.line([(X(-.09), Yd(yy)), (X(-.05), Yd(yy))], fill=dark(st["inner"], .8), width=max(1, int(.006 * Hs)))
-    # solapa / canto delantero del tapado con brillo
-    d.line([(X(-.03), Yd(.17)), (X(-.045), Yd(.45))], fill=coat_hi, width=max(1, int(.016 * Hs)))
+            d.line([(XL(-.09, yy), Yd(yy)), (XL(-.05, yy), Yd(yy))], fill=dark(st["inner"], .8), width=max(1, int(.006 * Hs)))
+    d.line([(XL(-.03, .17), Yd(.17)), (XL(-.045, .45), Yd(.45))], fill=coat_hi, width=max(1, int(.016 * Hs)))
     if st["buttons"]:                                                                 # cruzado: doble fila
         for yy in (.28, .34, .40):
             for xx in (-.02, .015):
-                d.ellipse([X(xx) - .007 * Hs, Yd(yy) - .007 * Hs, X(xx) + .007 * Hs, Yd(yy) + .007 * Hs], fill=(14, 18, 16))
-    flap(0, coat, coat_hi)
+                d.ellipse([XL(xx, yy) - .007 * Hs, Yd(yy) - .007 * Hs, XL(xx, yy) + .007 * Hs, Yd(yy) + .007 * Hs], fill=(14, 18, 16))
+    # panel delantero del tapado: angosto, va por delante de la pierna que avanza
+    fpanel = [(XL(-.09, .43), Yd(.43)), (XL(-.05, .43), Yd(.43)), (ank[front] - .012 * Hs, hem_y),
+              (ank[front] - .07 * Hs, hem_y + .006 * Hs)]
+    _poly(d, fpanel, coat)
+    d.line([fpanel[0], fpanel[3]], fill=coat_hi, width=max(1, int(.012 * Hs)))
     arm(a_near, tuple(min(255, int(v * 1.15 + 6)) for v in coat), coat_hi, st["skin"])
-    # cuello del tapado
     if st["collar"] == "mao":
-        _poly(d, [(X(-.035), Yd(.125)), (X(.045), Yd(.12)), (X(.06), Yd(.185)), (X(-.04), Yd(.185))], coat)
-        d.line([(X(-.035), Yd(.125)), (X(-.04), Yd(.185))], fill=coat_hi, width=max(1, int(.012 * Hs)))
+        _poly(d, [(XL(-.035, .125), Yd(.125)), (XL(.045, .12), Yd(.12)), (XL(.06, .185), Yd(.185)), (XL(-.04, .185), Yd(.185))], coat)
+        d.line([(XL(-.035, .125), Yd(.125)), (XL(-.04, .185), Yd(.185))], fill=coat_hi, width=max(1, int(.012 * Hs)))
     else:
-        _poly(d, [(X(-.04), Yd(.16)), (X(.05), Yd(.15)), (X(.06), Yd(.2)), (X(-.06), Yd(.24))], dark(coat, 1.15))
-    neck_x, neck_y = X(-.01) / S_, Yd(.165) / S_                   # base del cuello (en píxeles finales)
+        _poly(d, [(XL(-.04, .16), Yd(.16)), (XL(.05, .15), Yd(.15)), (XL(.06, .2), Yd(.2)), (XL(-.06, .24), Yd(.24))],
+              dark(coat, 1.15))
+    neck_x, neck_y = XL(-.01, .165) / S_, Yd(.165) / S_                   # base del cuello (en píxeles finales)
     out = _finish(img, int(Wc / S_), int(img.height / S_)).copy()
     stamp_head(out, kind, neck_x, neck_y)
     # recortar abajo para que la suela toque el piso (la imagen termina en la suela)
@@ -2234,16 +2241,20 @@ def protagonist(frames, idle, ox, cyc, delay=0.0):
             f'<g opacity="0" style="{FRZ_VIS}">{image(idle, ox, FEET - idle.height + 1, up=1)}</g>')
 
 
-A_p, cyc_p = gait_params(PH, NEAR_SPEED)                 # caminan a la velocidad de la cámara: el pie no patina
-cl = walk_frames(lambda ph, a: hero("morpheus", PH, ph, a), A_p)
-cl_idle = hero("morpheus", PH, 0.0, .04, facing_right=True)
+# Cada uno con su andar (los dos a la velocidad de la cámara, sin patinar): Claude un poco más alto, con
+# zancadas largas y lentas; Lucas con pasos más cortos y frecuentes. Así no caminan sincronizados.
+PH_C = round(PH * 1.05)
+A_c, cyc_c = gait_params(PH_C, NEAR_SPEED, cadence=1.3, amax=.5)
+A_p, cyc_p = gait_params(PH, NEAR_SPEED, cadence=1.0, amax=.5)
+cl = walk_frames(lambda ph, a: hero("morpheus", PH_C, ph, a), A_c)
+cl_idle = hero("morpheus", PH_C, 0.0, .04, facing_right=True)
 lu = walk_frames(lambda ph, a: hero("neo", PH, ph, a), A_p)
 lu_idle = hero("neo", PH, 0.0, .04)
 CLX, LUX = 98, 146
 # sombras
 for x_ in (CLX, LUX):
     body.append(f'<ellipse cx="{x_ + cl[0].width / 2}" cy="{FEET}" rx="8" ry="1.6" fill="#000" opacity=".22"/>')
-body.append(protagonist(cl, cl_idle, CLX, cyc_p))
+body.append(protagonist(cl, cl_idle, CLX, cyc_c))
 LOOK0, LOOK1 = 16.6, 19.0                          # Lucas se da vuelta para mirarla
 css.append(f"@keyframes lturn{{0%,{pct(LOOK0):.3f}%{{transform:scaleX(1)}}{pct(LOOK0) + .001:.3f}%,{pct(LOOK1):.3f}%"
            f"{{transform:scaleX(-1)}}{pct(LOOK1) + .001:.3f}%,100%{{transform:scaleX(1)}}}}")
