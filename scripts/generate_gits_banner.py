@@ -115,6 +115,40 @@ def hexc(c):
     return "#%02x%02x%02x" % tuple(int(v) for v in c)
 
 
+# fuente 3x5 para textos chicos (HUD, cartel)
+MINI = {
+ "A": ["010", "101", "111", "101", "101"], "B": ["110", "101", "110", "101", "110"],
+ "C": ["011", "100", "100", "100", "011"], "D": ["110", "101", "101", "101", "110"],
+ "E": ["111", "100", "110", "100", "111"], "F": ["111", "100", "110", "100", "100"],
+ "G": ["011", "100", "101", "101", "011"], "H": ["101", "101", "111", "101", "101"],
+ "I": ["111", "010", "010", "010", "111"], "J": ["001", "001", "001", "101", "010"],
+ "K": ["101", "101", "110", "101", "101"], "L": ["100", "100", "100", "100", "111"],
+ "M": ["101", "111", "111", "101", "101"], "N": ["110", "101", "101", "101", "101"],
+ "O": ["010", "101", "101", "101", "010"], "P": ["110", "101", "110", "100", "100"],
+ "Q": ["010", "101", "101", "110", "011"], "R": ["110", "101", "110", "101", "101"],
+ "S": ["011", "100", "010", "001", "110"], "T": ["111", "010", "010", "010", "010"],
+ "U": ["101", "101", "101", "101", "111"], "V": ["101", "101", "101", "101", "010"],
+ "W": ["101", "101", "111", "111", "101"], "X": ["101", "101", "010", "101", "101"],
+ "Y": ["101", "101", "010", "010", "010"], "Z": ["111", "001", "010", "100", "111"],
+ "0": ["111", "101", "101", "101", "111"], "1": ["010", "110", "010", "010", "111"],
+ "2": ["110", "001", "010", "100", "111"], "3": ["110", "001", "010", "001", "110"],
+ "4": ["101", "101", "111", "001", "001"], "5": ["111", "100", "110", "001", "110"],
+ "6": ["011", "100", "111", "101", "111"], "7": ["111", "001", "010", "010", "010"],
+ "8": ["111", "101", "111", "101", "111"], "9": ["111", "101", "111", "001", "110"],
+ " ": ["000"] * 5, ".": ["000", "000", "000", "000", "010"], ",": ["000", "000", "000", "010", "100"],
+ ":": ["000", "010", "000", "010", "000"], "/": ["001", "001", "010", "100", "100"],
+ ">": ["100", "010", "001", "010", "100"], "+": ["000", "010", "111", "010", "000"],
+ "-": ["000", "000", "111", "000", "000"], "(": ["010", "100", "100", "100", "010"],
+ ")": ["010", "001", "001", "001", "010"], "_": ["000", "000", "000", "000", "111"],
+ "'": ["010", "010", "000", "000", "000"], "!": ["010", "010", "010", "000", "010"],
+}
+
+
+def mini_px(text, x0, y0):
+    return {(x0 + i * 4 + x, y0 + y) for i, ch in enumerate(text)
+            for y, r in enumerate(MINI[ch]) for x, b in enumerate(r) if b == "1"}
+
+
 yy, xx = np.mgrid[0:H, 0:W]
 HORIZON = 98
 
@@ -420,8 +454,10 @@ css.append("@keyframes wfl{0%,100%{opacity:1}40%{opacity:1}41%{opacity:.1}63%{op
 body.append(image(flick.astype(np.uint8), attrs=' style="animation:wfl 11s infinite steps(1)"'))
 
 # ============================================================ 7. cartel holográfico (3 pantallas)
-CYC = 15  # s ciclo del cartel (sincroniza la luz sobre el personaje)
-SCREENS = [((255, 70, 170), (60, 10, 50)), ((70, 220, 255), (8, 30, 50)), ((255, 170, 70), (60, 24, 8))]
+CYC = 20  # 4 pantallas x 5 s
+SCREENS = [((255, 70, 170), (60, 10, 50)), ((70, 220, 255), (8, 30, 50)), ((255, 170, 70), (60, 24, 8)),
+           ((170, 240, 60), (14, 40, 10))]
+NS = len(SCREENS); SP = 100 / NS
 bx, by, bw_, bh_ = BILL
 for i, (hi, lo) in enumerate(SCREENS):
     g = np.zeros((bh_, bw_, 3))
@@ -438,22 +474,35 @@ for i, (hi, lo) in enumerate(SCREENS):
         cy, cx = bh_ // 2, bw_ // 2
         m = ((np.mgrid[0:bh_, 0:bw_][0] - cy) / 7) ** 2 + ((np.mgrid[0:bh_, 0:bw_][1] - cx) / 8) ** 2
         g[m < 1] = (200, 250, 255); g[m < .45] = (20, 90, 120); g[m < .12] = (5, 10, 20)
-    else:        # franjas + bloque de texto
+    elif i == 2:  # franjas + bloque de texto
         g[::4] = lerp(g[::4], np.array([255, 230, 180]), .5)
         g[bh_ // 2 - 4:bh_ // 2 + 4, 3:bw_ - 3] = (255, 236, 200)
         for cx in range(4, bw_ - 4, 3):
             g[bh_ // 2 - 2:bh_ // 2 + 2, cx] = (90, 30, 10)
+    else:        # Limao: rodaja de lima + "IA"
+        gy, gx = np.mgrid[0:bh_, 0:bw_]
+        cy, cx = 11, bw_ / 2 - .5
+        d = np.hypot(gy - cy, gx - cx)
+        ang = np.arctan2(gy - cy, gx - cx)
+        g[d < 8] = (60, 140, 30); g[d < 7] = (190, 245, 90); g[d < 6] = (225, 255, 150)
+        seg = (np.abs(np.sin(ang * 3.5)) < .22) & (d < 6) & (d > 1.2)
+        g[seg] = (190, 245, 90)
+        g[d < 1.2] = (240, 255, 200)
+        for ch, ox in (("I", 5), ("A", 9)):
+            for ry, row in enumerate(MINI[ch]):
+                for rx, b in enumerate(row):
+                    if b == "1":
+                        g[22 + ry, ox + rx] = (225, 255, 150)
     g[::2] *= .82  # scanlines
     full = np.zeros((H, W, 4))
     full[by:by + bh_, bx:bx + bw_, :3] = posterize(g, 12, 10)
     full[by:by + bh_, bx:bx + bw_, 3] = 255
     k = nid("scr")
-    p0, p1 = i * 33.33, (i + 1) * 33.33
-    css.append(f"@keyframes {k}{{0%,100%{{opacity:{1 if i == 0 else 0}}}"
-               f"{max(p0 - .5, 0):.2f}%{{opacity:{1 if i == 0 else 0}}}{p0 + .01:.2f}%{{opacity:1}}"
+    p0, p1 = i * SP, (i + 1) * SP
+    css.append(f"@keyframes {k}{{0%,100%{{opacity:0}}{max(p0 - .5, 0):.2f}%{{opacity:0}}{p0 + .01:.2f}%{{opacity:1}}"
                f"{p0 + 1:.2f}%{{opacity:.3}}{p0 + 1.6:.2f}%{{opacity:1}}{p1 - .01:.2f}%{{opacity:1}}{p1:.2f}%{{opacity:0}}}}"
                if i else
-               f"@keyframes {k}{{0%{{opacity:1}}33.32%{{opacity:1}}33.33%,99.99%{{opacity:0}}100%{{opacity:1}}}}")
+               f"@keyframes {k}{{0%{{opacity:1}}{SP - .01:.2f}%{{opacity:1}}{SP:.2f}%,99.99%{{opacity:0}}100%{{opacity:1}}}}")
     # halo de luz del cartel
     defs.append(f'<radialGradient id="bh{i}"><stop offset="0" stop-color="{hexc(hi)}" stop-opacity=".38"/>'
                 f'<stop offset="1" stop-color="{hexc(hi)}" stop-opacity="0"/></radialGradient>')
@@ -490,6 +539,28 @@ for ry in range(ROOF + 4, H, 3):            # charcos que reflejan
 body.append(image(rgba(near_rgb, near * 255)))
 body.append(rect(34, ROOF - 27, 1, 1, "#ff3048", ' style="animation:red 1.8s infinite steps(1)"'))
 
+# --- mate sobre el equipo de aire, con vapor
+MATE = [
+    ".....m",
+    "....m.",
+    ".yyym.",
+    "ckkkkc",
+    "cbbbbc",
+    "bbbbbb",
+    ".bbbb.",
+    "..ss..",
+]
+MPAL = {"m": "#b9c2cc", "y": "#7aa63a", "c": "#8a5a3a", "k": "#3a2418", "b": "#5c3a26", "s": "#2a1a12"}
+MX, MY = 200, ROOF - 7 - len(MATE)
+body.append("".join(f'<g fill="{c}">{runs({(MX + x, MY + y) for y, r in enumerate(MATE) for x, ch in enumerate(r) if ch == k})}</g>'
+                    for k, c in MPAL.items()))
+body.append(rect(MX, MY + 3, 1, 1, "#c08060"))                       # brillo de la ciudad en la calabaza
+css.append("@keyframes steam{0%{transform:translate(0,0);opacity:0}15%{opacity:.55}"
+           "100%{transform:translate(-3px,-12px);opacity:0}}")
+for j, (dx, dl) in enumerate([(1, 0), (3, 1.1), (2, 2.2)]):
+    body.append(f'<rect x="{MX + dx}" y="{MY + 1}" width="1" height="2" fill="#e8e4f0" opacity="0" '
+                f'style="animation:steam 3.3s {dl}s infinite steps(8)"/>')
+
 # ============================================================ 9. el personaje (tu avatar)
 cut = Image.open(ROOT / "assets" / "avatar-cutout.png").convert("RGBA")
 cut = cut.crop(cut.getchannel("A").getbbox())                  # 287x460
@@ -521,9 +592,9 @@ for i, (hi, _) in enumerate(SCREENS):
     k = f"scr{[n for n in range(1, 100)][0]}"
     lay = rgba(np.broadcast_to(np.array(hi, float), (CH, CW, 3)), rim * 230)
     lid = nid("rim")
-    p0, p1 = i * 33.33, (i + 1) * 33.33
+    p0, p1 = i * SP, (i + 1) * SP
     if i == 0:
-        css.append(f"@keyframes {lid}{{0%,33.32%{{opacity:1}}33.33%,99.99%{{opacity:0}}100%{{opacity:1}}}}")
+        css.append(f"@keyframes {lid}{{0%,{SP - .01:.2f}%{{opacity:1}}{SP:.2f}%,99.99%{{opacity:0}}100%{{opacity:1}}}}")
     else:
         css.append(f"@keyframes {lid}{{0%,{p0 - .01:.2f}%{{opacity:0}}{p0:.2f}%,{p1 - .01:.2f}%{{opacity:1}}{p1:.2f}%,100%{{opacity:0}}}}")
     body.append(f'<g style="animation:{lid} {CYC}s infinite steps(1)">{image(lay, CX, CY)}</g>')
@@ -585,7 +656,7 @@ FONT = {
  " ": ["00000"] * 7,
 }
 TEXT, TX, TY, TC = "LUCAS HIMELFARB", 12, 14, "#d8f6f0"
-TCYC = 16
+TCYC = 30  # ciclo maestro: nombre + dossier HUD
 css.append(f"@keyframes bl{{0%,49%{{opacity:1}}50%,100%{{opacity:0}}}}"
            f"@keyframes tglitch{{0%,62%,64%,100%{{transform:translateX(0)}}62.5%{{transform:translateX(2px)}}63.2%{{transform:translateX(-1px)}}}}")
 chars = []
@@ -593,18 +664,89 @@ for i, ch in enumerate(TEXT):
     px = {(TX + i * 6 + x, TY + y) for y, r in enumerate(FONT[ch]) for x, b in enumerate(r) if b == "1"}
     if not px:
         continue
-    on = 3 + i * 2.2
+    on = (.4 + i * .17) / TCYC * 100
     k = f"t{i}"
-    css.append(f"@keyframes {k}{{0%,{on:.1f}%{{opacity:0}}{on + .1:.1f}%,92%{{opacity:1}}92.1%,100%{{opacity:0}}}}")
+    css.append(f"@keyframes {k}{{0%,{on:.2f}%{{opacity:0}}{on + .1:.2f}%,98.5%{{opacity:1}}98.6%,100%{{opacity:0}}}}")
     chars.append(f'<g style="animation:{k} {TCYC}s infinite">'
                  f'<g fill="#000" opacity=".6">{runs({(x + 1, y + 1) for x, y in px})}</g>'
                  f'<g fill="{TC}">{runs(px)}</g></g>')
 body.append(f'<g style="animation:tglitch {TCYC}s infinite steps(1)">{"".join(chars)}</g>')
 # indicador + subrayado fino
 body.append(rect(TX - 6, TY + 2, 3, 3, "#ff3048", ' style="animation:bl 1.2s infinite steps(1)"'))
-css.append(f"@keyframes uline{{0%,34%{{transform:scaleX(0)}}44%,92%{{transform:scaleX(1)}}92.1%,100%{{transform:scaleX(0)}}}}")
+css.append(f"@keyframes uline{{0%,9%{{transform:scaleX(0)}}12%,98.5%{{transform:scaleX(1)}}98.6%,100%{{transform:scaleX(0)}}}}")
 body.append(f'<rect x="{TX}" y="{TY + 10}" width="{len(TEXT) * 6 - 1}" height="1" fill="{TC}" opacity=".45" '
             f'style="transform-origin:{TX}px 0;animation:uline {TCYC}s infinite"/>')
+
+# ============================================================ 13. dossier HUD: perfil como persona y profesional
+# Cada tarjeta: (encabezado, [(etiqueta, valor), ...]). Editá acá para cambiar el contenido.
+CARDS = [
+    ("PERFIL 01/04", [("CLASE", "SOFTWARE ENGINEER"), ("GREMIO", "HUMAND"), ("BASE", "CORDOBA, ARGENTINA")]),
+    ("SIDE QUEST 02/04", [("NOMBRE", "LIMAO"), ("MISION", "IA PARA PYMES"), ("ESTADO", "EN CONSTRUCCION")]),
+    ("INVENTARIO 03/04", [("X1", "MATE CEBADO"), ("X1", "TECLADO MECANICO"), ("X99", "CURIOSIDAD")]),
+    ("LOG 04/04", [("DESDE", "2019 EN GITHUB"), ("COPILOT", "CLAUDE"), ("STATUS", "ONLINE")]),
+]
+PX, PY, PW, PH = 8, 27, 116, 34
+OPEN, CARD = 3.2, 6.6                     # s: apertura del panel y duración de cada tarjeta
+CLOSE = OPEN + CARD * len(CARDS)          # 29.6 s
+HC_HEAD, HC_LBL, HC_VAL, HC_ACC = "#ffb050", "#6f98a4", "#d8f6f0", "#ff3048"
+pct = lambda t: t / TCYC * 100
+
+css.append(f"@keyframes hudp{{0%,{pct(OPEN - .25):.2f}%{{transform:scaleY(0)}}{pct(OPEN):.2f}%,{pct(CLOSE - .25):.2f}%"
+           f"{{transform:scaleY(1)}}{pct(CLOSE):.2f}%,100%{{transform:scaleY(0)}}}}"
+           "@keyframes scan{from{transform:translateY(0)}to{transform:translateY(32px)}}")
+panel = (rect(PX, PY, PW, PH, "#05060c", ' opacity=".62"')
+         + rect(PX, PY, PW, 7, HC_HEAD, ' opacity=".14"')
+         + f'<rect x="{PX + .5}" y="{PY + .5}" width="{PW - 1}" height="{PH - 1}" fill="none" stroke="{HC_VAL}" '
+           f'stroke-width="1" opacity=".22" shape-rendering="crispEdges"/>')
+for cx_, cy_, dx_, dy_ in [(PX, PY, 1, 1), (PX + PW - 1, PY, -1, 1), (PX, PY + PH - 1, 1, -1), (PX + PW - 1, PY + PH - 1, -1, -1)]:
+    panel += f'<g fill="{HC_VAL}" opacity=".8">{runs({(cx_ + dx_ * i, cy_) for i in range(4)} | {(cx_, cy_ + dy_ * i) for i in range(4)})}</g>'
+panel += (f'<g opacity=".07" style="animation:scan 2.4s infinite linear">{rect(PX + 1, PY + 1, PW - 2, 1, HC_VAL)}</g>')
+cards_svg = []
+for ci, (head, rows) in enumerate(CARDS):
+    t0, t1 = OPEN + ci * CARD, OPEN + (ci + 1) * CARD
+    kv = nid("card")
+    css.append(f"@keyframes {kv}{{0%,{pct(t0):.2f}%{{opacity:0}}{pct(t0) + .01:.2f}%,{pct(t1) - .2:.2f}%{{opacity:1}}"
+               f"{pct(t1) - .19:.2f}%,100%{{opacity:0}}}}")
+    lines = [(f"> {head}", HC_HEAD, None)] + [(f"{lbl}", HC_LBL, val) for lbl, val in rows]
+    out, t = [], t0 + .15
+    for li, (txt, col, val) in enumerate(lines):
+        ly_ = PY + 2 + li * 8 if li else PY + 1
+        full = txt if val is None else f"{txt:<8}{val}"
+        n = len(full)
+        px_lbl = mini_px(txt, PX + 3, ly_)
+        px_val = mini_px(val, PX + 3 + 8 * 4, ly_) if val else set()
+        if ci == 3 and val == "ONLINE":
+            out_dot = rect(PX + 3 + (8 + len(val)) * 4 + 1, ly_ + 1, 3, 3, "#58e07a",
+                           ' style="animation:bl 1.2s infinite steps(1)"')
+        else:
+            out_dot = ""
+        cid, ka = nid("tw"), nid("ty")
+        dur = n * .035
+        n += 2 if out_dot else 0
+        css.append(f"@keyframes {ka}{{0%,{pct(t):.2f}%{{transform:scaleX(0)}}{pct(t + dur):.2f}%,100%{{transform:scaleX(1)}}}}")
+        defs.append(f'<clipPath id="{cid}"><rect x="{PX + 3}" y="{ly_ - 1}" width="{n * 4 + 6}" height="7" '
+                    f'style="transform-origin:{PX + 3}px 0;animation:{ka} {TCYC}s infinite steps({n})"/></clipPath>')
+        g = f'<g fill="{col}">{runs(px_lbl)}</g>' + (f'<g fill="{HC_VAL}">{runs(px_val)}</g>' if val else "")
+        out.append(f'<g clip-path="url(#{cid})"><g fill="#000" opacity=".5" transform="translate(1 1)">'
+                   f'{runs(px_lbl | px_val)}</g>{g}{out_dot}</g>')
+        t += dur + .12
+    if ci == 1:   # barra de progreso del side quest
+        kb = nid("bar")
+        css.append(f"@keyframes {kb}{{0%,{pct(t):.2f}%{{transform:scaleX(0)}}{pct(t + 1.2):.2f}%,100%{{transform:scaleX(.42)}}}}")
+        out.append(rect(PX + 3 + 8 * 4 + 64, PY + 2 + 3 * 8 + 1, 12, 3, HC_VAL, ' opacity=".2"')
+                   + f'<rect x="{PX + 3 + 8 * 4 + 64}" y="{PY + 2 + 3 * 8 + 1}" width="12" height="3" fill="#aaf03c" '
+                     f'style="transform-origin:{PX + 99}px 0;animation:{kb} {TCYC}s infinite"/>')
+    cards_svg.append(f'<g opacity="0" style="animation:{kv} {TCYC}s infinite steps(1)">{"".join(out)}</g>')
+# indicador de páginas
+dots = "".join(rect(PX + PW - 4 - (len(CARDS) - 1 - i) * 3, PY + 2, 2, 2, HC_HEAD, ' opacity=".25"') for i in range(len(CARDS)))
+for ci in range(len(CARDS)):
+    t0, t1 = OPEN + ci * CARD, OPEN + (ci + 1) * CARD
+    kd = nid("dot")
+    css.append(f"@keyframes {kd}{{0%,{pct(t0):.2f}%{{opacity:0}}{pct(t0) + .01:.2f}%,{pct(t1) - .2:.2f}%{{opacity:1}}"
+               f"{pct(t1) - .19:.2f}%,100%{{opacity:0}}}}")
+    dots += rect(PX + PW - 4 - (len(CARDS) - 1 - ci) * 3, PY + 2, 2, 2, HC_HEAD, f' opacity="0" style="animation:{kd} {TCYC}s infinite steps(1)"')
+body.append(f'<g style="transform-origin:0 {PY}px;transform:scaleY(0);animation:hudp {TCYC}s infinite">'
+            f'{panel}{"".join(cards_svg)}{dots}</g>')
 
 # ============================================================ salida
 svg = (f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {W} {H}" width="{OUT_W}" height="{OUT_H}" '
