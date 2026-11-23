@@ -2,7 +2,7 @@
 """Genera assets/lucas-himelfarb-construct.svg: segundo banner del perfil.
 
 Guiño a la escena del programa de entrenamiento: Claude (Morpheus) camina adelante
-y Lucas (Neo) lo sigue entre la multitud. Se le cruza un policía, aparece de repente
+y Lucas (Neo) lo sigue entre la multitud. Aparece de repente
 una mujer de vestido rojo, Lucas se da vuelta a mirarla y ella se convierte en un
 agente; después la calle se congela en código verde.
 
@@ -599,69 +599,120 @@ cm = corr[..., 3] > 0
 reg = near[cy0:cy0 + corr.shape[0], GX:GX + GW]
 reg[cm, :3] = corr[cm, :3]; reg[cm, 3] = 255
 
-# vereda
+# vereda neoyorquina: losas grandes de hormigón, cordón de granito, puertas de sótano de chapa,
+# tapas de servicio, chicles, grietas y un hidrante. Generador aparte para no alterar el resto.
+srng = np.random.default_rng(1212)
+sr = random.Random(1212)
 near[GROUND:, :, 3] = 255
-near[GROUND:, :, :3] = ramp((yy[GROUND:] - GROUND) / (H - GROUND), [(0, (150, 160, 140)), (1, (118, 128, 112))])
-near[GROUND, :, :3] = (60, 70, 62)
-near[GROUND + 1, :, :3] = (176, 186, 164)
-for lx in range(0, W, 22):                                              # juntas de baldosas
-    for yrow in range(GROUND + 2, H):
-        off = int((yrow - GROUND) * (lx - W / 2) / 260)
-        if 0 <= lx + off < W:
-            near[yrow, lx + off, :3] -= 22
-for yrow in (GROUND + 7, GROUND + 17, GROUND + 30):
-    if yrow < H:
-        near[yrow, :, :3] -= 16
-near[GROUND:, GX - 2:GX + GW + 2, :3] = (70, 76, 74)                     # calzada bajo la senda
-near[GROUND:, GX - 3, :3] = (190, 196, 180); near[GROUND:, GX + GW + 2, :3] = (190, 196, 180)  # cordones
-yb, hb = GROUND + 2, 1
-while yb < H:                                                          # rayas de la senda (más gruesas cerca)
-    near[yb:yb + hb, GX + 2:GX + GW - 2, :3] = (226, 228, 214)
-    yb += hb * 2 + 1
-    hb += 1
+SW_ROWS = [GROUND + 3, GROUND + 9, GROUND + 18, H]                     # filas de losas (más altas cerca)
+SLAB = 30                                                               # ancho de losa (~1.5 m)
+grain = srng.normal(0, 1, (H, W))
+SW_OFF = 7                                                              # juntas alineadas: grilla, no ladrillo
+for r0, r1 in zip(SW_ROWS, SW_ROWS[1:]):
+    off_ = SW_OFF
+    for sx0 in range(-off_, W, SLAB):
+        base_c = np.array([186, 186, 178]) + sr.uniform(-12, 10) + np.array([sr.uniform(-3, 3), 0, sr.uniform(-4, 2)])
+        x0_, x1_ = max(0, sx0), min(W, sx0 + SLAB)
+        if x1_ <= x0_:
+            continue
+        blk = np.broadcast_to(base_c, (r1 - r0, x1_ - x0_, 3)).copy()
+        blk += grain[r0:r1, x0_:x1_, None] * 3.2                        # grano del hormigón
+        vy = np.linspace(0, 1, r1 - r0)[:, None, None]
+        blk *= (1.02 - .05 * vy)                                         # leve desgaste hacia el borde
+        near[r0:r1, x0_:x1_, :3] = blk
+        if sx0 >= 0:                                                    # junta vertical: sombra + borde claro
+            near[r0:r1, sx0, :3] = (118, 122, 116)
+            if sx0 + 1 < W:
+                near[r0:r1, sx0 + 1, :3] = np.minimum(near[r0:r1, sx0 + 1, :3] + 16, 255)
+        if sr.random() < .22:                                           # grieta
+            cxk, cyk = sr.uniform(x0_ + 3, max(x0_ + 4, x1_ - 3)), r0 + 1
+            for _ in range(int((r1 - r0) * 1.4)):
+                cyk += sr.uniform(.4, 1); cxk += sr.uniform(-1.1, 1.1)
+                if r0 <= int(cyk) < r1 and x0_ <= int(cxk) < x1_:
+                    near[int(cyk), int(cxk), :3] = (124, 126, 120)
+    near[r0, :, :3] = (122, 126, 120)                                    # junta horizontal
+    if r0 + 1 < H:
+        near[r0 + 1, :, :3] = np.minimum(near[r0 + 1, :, :3] + 12, 255)
+# cordón de granito con el borde iluminado y la cuneta en sombra
+near[GROUND, :, :3] = (46, 50, 48)
+near[GROUND + 1, :, :3] = (214, 214, 206)
+near[GROUND + 2, :, :3] = (168, 170, 164) + grain[GROUND + 2, :, None] * 6
+for gx_ in range(0, W, 47):
+    near[GROUND + 1:GROUND + 3, gx_, :3] = (120, 122, 118)
+# chicles y manchas
+for _ in range(90):
+    gx_, gy_ = sr.randrange(0, W), sr.randrange(GROUND + 4, H)
+    near[gy_, gx_, :3] = np.array(near[gy_, gx_, :3]) * .7
+for _ in range(5):
+    ox_, oy_, rw = sr.randrange(0, W), sr.randrange(GROUND + 4, GROUND + 12), sr.randrange(4, 9)
+    yy_o, xx_o = np.ogrid[GROUND + 3:H, 0:W]
+    m_o = ((xx_o - ox_) / rw) ** 2 + ((yy_o - oy_) / (rw * .35)) ** 2 < 1
+    near[GROUND + 3:H, :, :3][m_o] *= .86
+
+
+def diamond_plate(x0, y0, w, h):
+    """Puerta de sótano de chapa diamantada (dos hojas)."""
+    yy_d, xx_d = np.mgrid[0:h, 0:w]
+    plate = np.zeros((h, w, 3)) + (120, 124, 126)
+    patt = ((xx_d + (yy_d // 2) * 2) % 4 == 0) & (yy_d % 2 == 0)
+    plate[patt] = (176, 180, 182)
+    plate[:, w // 2] = (70, 74, 76)                                      # junta entre hojas
+    plate[0, :] = (200, 204, 204); plate[-1, :] = (60, 62, 64)
+    plate[:, 0] = (190, 194, 194); plate[:, -1] = (66, 68, 70)
+    for hx_ in (2, w - 3):
+        plate[h // 3, hx_] = plate[2 * h // 3, hx_] = (50, 52, 54)      # bisagras
+    near[y0:y0 + h, x0:x0 + w, :3] = plate
+
+
+def manhole(cx_, cy_, rx, ry):
+    yy_m, xx_m = np.ogrid[0:H, 0:W]
+    m_ = ((xx_m - cx_) / rx) ** 2 + ((yy_m - cy_) / ry) ** 2
+    near[(m_ < 1) & (yy_m >= GROUND + 3), :3] = (88, 90, 88)
+    ring = (m_ >= .7) & (m_ < 1) & (yy_m >= GROUND + 3)
+    near[ring, :3] = (60, 62, 60)
+    grid_ = (m_ < .7) & ((xx_m + yy_m) % 3 == 0) & (yy_m >= GROUND + 3)
+    near[grid_, :3] = (110, 112, 108)
+
+
+diamond_plate(22, H - 12, 22, 9)
+diamond_plate(GX + GW + 22, H - 13, 24, 10)
+manhole(120, GROUND + 7, 6, 2.4)
+# hidrante junto al cordón
+HX, HB = GX - 30, GROUND + 6
+hyd = Image.new("RGBA", (9, 14), (0, 0, 0, 0)); hd = ImageDraw.Draw(hyd)
+hd.rectangle([2, 4, 6, 12], fill=(176, 40, 40)); hd.rectangle([1, 12, 7, 13], fill=(140, 30, 30))
+hd.ellipse([2, 1, 6, 5], fill=(190, 48, 48)); hd.rectangle([3, 0, 5, 1], fill=(150, 34, 34))
+hd.rectangle([0, 6, 8, 7], fill=(160, 36, 36)); hd.point((4, 3), fill=(230, 120, 110))
+hd.rectangle([2, 5, 2, 11], fill=(214, 90, 84))
+ha = np.asarray(hyd, dtype=float); hm = ha[..., 3] > 0
+ys_h, xs_h = np.nonzero(hm)
+near[HB - 14 + ys_h, HX + xs_h, :3] = ha[ys_h, xs_h, :3]
+
+# bocacalle de nuestro lado: calzada que se abre hacia la cámara, con senda de rayas verticales
+# (en el sentido de la calle que cruzamos), en perspectiva hacia el punto de fuga de la calle del fondo
+VPY_S = 46.0
+for y_ in range(GROUND, H):
+    f_ = (y_ + .5 - VPY_S) / (GROUND - VPY_S)
+    half = (GW / 2 + 2) * f_
+    xa_, xb_ = GC - half, GC + half
+    xs_all = np.arange(W) + .5
+    road = (xs_all >= xa_) & (xs_all <= xb_)
+    near[y_, road, :3] = (70, 76, 74)
+    if y_ >= GROUND + 2:
+        Xn = (xs_all - GC) / f_                                          # posición "real" en la calle
+        stripe = road & (np.abs(Xn) < GW / 2 - 3) & (((Xn + GW / 2) % 7) < 3.6)
+        near[y_, stripe, :3] = (226, 228, 214)
+    for xe in (xa_ - 1, xb_ + 1):                                        # cordones en perspectiva
+        xi = int(round(xe))
+        if 0 <= xi < W:
+            near[y_, xi, :3] = (200, 202, 196)
 for _ in range(3):                                                      # postes / farolas
     px = random.choice([random.randrange(10, GX - 12), random.randrange(GX + GW + 8, W - 10)])
     near[30:GROUND + 2, px:px + 2, :3] = (40, 48, 44); near[30:GROUND + 2, px:px + 2, 3] = 255
     near[30:32, px - 4:px + 6, :3] = (40, 48, 44); near[30:32, px - 4:px + 6, 3] = 255
 
 
-def officer_leg_up(h):
-    """Policía de pie mirando a la derecha, con un pie apoyado en el paragolpe y el brazo sobre la rodilla."""
-    u = h / 24
-    w = int(12 * u) + 6
-    im = Image.new("RGBA", (w, h + 1), (0, 0, 0, 0)); d = ImageDraw.Draw(im)
-    cx = w * .42
-    navy, navy_d, skin, shoe = (30, 40, 74), (22, 30, 56), (196, 150, 118), (12, 12, 14)
-    foot = h - 1
-    # pierna de apoyo (recta) y pierna levantada (rodilla adelante, pie sobre el paragolpe)
-    d.polygon([(cx - 1.0 * u, 12.5 * u), (cx + .9 * u, 12.5 * u), (cx + .7 * u, foot - u), (cx - .9 * u, foot - u)], fill=navy_d)
-    d.rectangle([cx - .9 * u, foot - u, cx + 1.4 * u, foot], fill=shoe)
-    kx, ky = cx + 3.6 * u, 11.8 * u                                     # rodilla
-    fx, fy = cx + 4.4 * u, foot - 6.0 * u                               # pie sobre el paragolpe
-    d.polygon([(cx - .6 * u, 12.0 * u), (cx + .8 * u, 13.4 * u), (kx + .6 * u, ky + .6 * u), (kx - .2 * u, ky - .7 * u)], fill=navy)
-    d.polygon([(kx - .4 * u, ky), (kx + .8 * u, ky), (fx + .6 * u, fy - u), (fx - .6 * u, fy - u)], fill=navy)
-    d.rectangle([fx - .8 * u, fy - u, fx + 1.6 * u, fy], fill=shoe)
-    # torso inclinado hacia adelante
-    d.polygon([(cx - 1.4 * u, 4.6 * u), (cx + 1.6 * u, 4.2 * u), (cx + 2.0 * u, 12.6 * u), (cx - 1.6 * u, 12.8 * u)], fill=navy)
-    d.rectangle([cx - 1.7 * u, 11.6 * u, cx + 2.0 * u, 12.4 * u], fill=(14, 14, 16))                   # cinturón
-    d.rectangle([cx + .6 * u, 6.0 * u, cx + 1.3 * u, 6.8 * u], fill=(230, 190, 70))                     # placa
-    # brazo apoyado sobre la rodilla
-    d.line([(cx + .4 * u, 5.2 * u), (cx + 2.2 * u, 9.0 * u), (kx + .2 * u, ky - .9 * u)], fill=navy_d, width=max(2, int(1.4 * u)))
-    d.ellipse([kx - .4 * u, ky - 1.5 * u, kx + .9 * u, ky - .4 * u], fill=skin)
-    # cabeza con gorra
-    hx, hy = cx + .6 * u, 2.3 * u
-    d.rectangle([cx - .1 * u, 3.4 * u, cx + .9 * u, 4.6 * u], fill=skin)
-    d.ellipse([hx - 1.5 * u, hy - 1.8 * u, hx + 1.5 * u, hy + 1.7 * u], fill=skin)
-    d.rectangle([hx - 1.7 * u, hy - 2.4 * u, hx + 1.6 * u, hy - 1.0 * u], fill=(26, 34, 64))
-    d.rectangle([hx - 1.7 * u, hy - 1.3 * u, hx + 1.6 * u, hy - 1.0 * u], fill=(10, 10, 12))
-    d.rectangle([hx + 1.2 * u, hy - 1.2 * u, hx + 2.6 * u, hy - .8 * u], fill=(10, 10, 12))            # visera
-    d.rectangle([hx + .4 * u, hy - 2.1 * u, hx + 1.0 * u, hy - 1.5 * u], fill=(220, 180, 60))
-    d.rectangle([hx - 1.4 * u, hy - 1.0 * u, hx - .4 * u, hy + .4 * u], fill=(40, 30, 24))             # pelo de la nuca
-    d.point((hx + .9 * u, hy - .2 * u), fill=(30, 24, 20))
-    return im
-
-
-near_rgb = posterize(np.clip(near[..., :3], 0, 255), 40, 8)
+near_rgb = posterize(np.clip(near[..., :3], 0, 255), 64, 6)
 near_im = Image.fromarray(np.dstack([near_rgb, near[..., 3]]).astype(np.uint8), "RGBA")
 tile = image(near_im, up=1) + image(near_im, x=-W, up=1)
 # fase del tile: al congelar, la senda queda justo debajo de Claude y Lucas (x ≈ 93..185)
@@ -1284,17 +1335,6 @@ css.append(f"@keyframes lturn{{0%,{pct(LOOK0):.3f}%{{transform:scaleX(1)}}{pct(L
            f"{{transform:scaleX(-1)}}{pct(LOOK1) + .001:.3f}%,100%{{transform:scaleX(1)}}}}")
 body.append(f'<g style="transform-origin:{LUX + lu[0].width / 2}px 0;animation:lturn {T}s infinite linear">'
             f'{protagonist(lu, lu_idle, LUX, .3)}</g>')
-
-# ============================================================ el policía que se le cruza a Lucas
-COP = dict(coat=(30, 40, 74), shirt=(150, 170, 200), skin=(196, 150, 118), hair=(30, 24, 20), cap=(26, 34, 64),
-           badge=(230, 190, 70), belt=(14, 14, 16), pants=(24, 32, 60), coat_len=13)
-CPH, CPY, C0, C1 = 66, 123, 3.0, 12.0
-cop = [figure(CPH, 0, COP), figure(CPH, 1, COP)]
-kc = nid("cop")
-css.append(f"@keyframes {kc}{{0%,{pct(C0):.3f}%{{transform:translate(-50px,{CPY}px)}}{pct(C1):.3f}%,100%"
-           f"{{transform:translate(330px,{CPY}px)}}}}")
-body.append(f'<g style="transform:translate(-50px,{CPY}px);animation:{kc} {T}s infinite linear">'
-            f'{sprite_group(cop, 0, -CPH, step=.5, flip=True)}</g>')
 
 # ============================================================ multitud (fila de adelante, fuera de foco)
 for i in range(2):
