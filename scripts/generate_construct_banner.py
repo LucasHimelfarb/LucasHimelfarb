@@ -1382,7 +1382,13 @@ LUCAS = dict(coat=(30, 32, 38), shirt=(30, 34, 40), skin=(214, 168, 136), hair=(
 
 
 def frozen(im):
-    """Versión congelada: silueta de código verde."""
+    """Versión congelada. Desde que el congelado funde todo a negro (y sólo quedan Claude y Lucas), estas
+    siluetas quedan tapadas: devuelve una imagen vacía, que image() omite, para no sumar peso al SVG."""
+    return Image.new("RGBA", (1, 1), (0, 0, 0, 0))
+
+
+def frozen_green(im):
+    """(Versión anterior) silueta de código verde."""
     a = np.asarray(im, dtype=float)
     lum = (a[..., :3] @ np.array([.3, .59, .11])) / 255
     out = np.zeros_like(a)
@@ -1446,12 +1452,8 @@ def sprite_group(frames, ox, oy, step=.5, freeze_img=None, flip=False, delay=Non
     return f'<g{fx}>{s}</g>'
 
 
-# ============================================================ capa de congelado (debajo de la multitud)
-css.append(f"@keyframes frzbg{{0%,{pct(F0) - .01:.3f}%{{opacity:0}}{pct(F0):.3f}%{{opacity:.95}}{pct(F0 + .5):.3f}%,"
-           f"{pct(F1 - .4):.3f}%{{opacity:.82}}{pct(F1):.3f}%,100%{{opacity:0}}}}")
-body.append(rect(0, 0, W, H, "#021a0c", f' opacity="0" style="animation:frzbg {T}s infinite linear"'))
-
-# lluvia de código (solo durante el congelado)
+# (la antigua capa verde del congelado se reemplazó por el fundido a negro con lluvia de código, más abajo;
+#  esta lluvia vieja se sigue generando sin dibujarse para no alterar la secuencia aleatoria de la escena)
 GLYPHS = [c for c in MINI if c not in " .,'"]
 rain = []
 for cx_ in range(2, W, 7):
@@ -1468,7 +1470,7 @@ for cx_ in range(2, W, 7):
     rain.append(f'<g style="animation:{k} {dur:.2f}s {dl:.2f}s infinite linear">'
                 f'<g fill="#1f8a44" opacity="{random.uniform(.35, .7):.2f}">{runs(px_body)}</g>'
                 f'<g fill="#b8ffc8">{runs(px_head)}</g></g>')
-body.append(f'<g opacity="0" style="{FRZ_VIS}">{"".join(rain)}</g>')
+rain = None
 
 # ============================================================ tránsito sobre la avenida
 # ============================================================ arquetipos de la multitud
@@ -2251,6 +2253,41 @@ cl_idle = hero("morpheus", PH_C, 0.0, .04, facing_right=True)
 lu = walk_frames(lambda ph, a: hero("neo", PH, ph, a), A_p)
 lu_idle = hero("neo", PH, 0.0, .04)
 CLX, LUX = 98, 146
+# ============================================================ congelado: fundido a negro y lluvia de código
+# Todo se apaga a negro (rápido, empezando un instante antes del congelado), cae la lluvia de código de
+# Matrix y sólo quedan Claude y Lucas. Al terminar, la lluvia se apaga y la calle vuelve.
+css.append(f"@keyframes blackout{{0%,{pct(F0 - .6):.3f}%{{opacity:0}}{pct(F0):.3f}%,{pct(F1):.3f}%{{opacity:1}}"
+           f"{pct(F1 + .7):.3f}%,100%{{opacity:0}}}}")
+css.append(f"@keyframes rainvis{{0%,{pct(F0 - .25):.3f}%{{opacity:0}}{pct(F0 + .5):.3f}%,{pct(F1 - .5):.3f}%{{opacity:1}}"
+           f"{pct(F1 + .1):.3f}%,100%{{opacity:0}}}}")
+body.append(rect(-60, -80, W + 120, H + 160, "#000", f' opacity="0" style="animation:blackout {T}s infinite linear"'))
+rrng = random.Random(1999)
+RAIN_GLYPHS = [c for c in MINI if c not in " .,'"]
+STEP_Y = 6
+rain2 = []
+for cx_ in range(-12, W + 12, 5):
+    n = rrng.randint(9, 18)
+    dur = rrng.uniform(1.6, 3.6)
+    dl = -rrng.uniform(0, dur)
+    k = nid("mr")
+    span_ = (n * STEP_Y) + H + 80
+    css.append(f"@keyframes {k}{{from{{transform:translateY({-n * STEP_Y - 40}px)}}to{{transform:translateY({H + 40}px)}}}}")
+    glyphs = []
+    for j in range(n):                                   # j = 0 arriba (cola) ... n-1 abajo (punta)
+        g = mini_px(rrng.choice(RAIN_GLYPHS), cx_, j * STEP_Y)
+        if rrng.random() < .5:                           # algunos invertidos: se parecen más a katakana
+            g = {(2 * cx_ + 2 - x, y) for x, y in g}
+        t_ = j / max(1, n - 1)
+        if j == n - 1:
+            col, op = "#e6ffe9", 1.0
+        elif j == n - 2:
+            col, op = "#8dffa6", .95
+        else:
+            col, op = "#22c55a", .12 + .75 * t_ ** 1.4
+        glyphs.append(f'<g fill="{col}" opacity="{op:.2f}">{runs(g)}</g>')
+    rain2.append(f'<g style="animation:{k} {dur:.2f}s {dl:.2f}s infinite linear">{"".join(glyphs)}</g>')
+body.append(f'<g opacity="0" style="animation:rainvis {T}s infinite linear">{"".join(rain2)}</g>')
+
 body.append(f'<ellipse cx="{CLX + cl[0].width / 2}" cy="{FEET}" rx="8" ry="1.6" fill="#000" opacity=".22"/>')
 body.append(protagonist(cl, cl_idle, CLX, cyc_c))
 
