@@ -2,9 +2,10 @@
 """Genera assets/lucas-himelfarb-construct.svg: segundo banner del perfil.
 
 Guiño a la escena del programa de entrenamiento: Claude (Morpheus) camina adelante
-entre una multitud y le explica a Lucas (Neo) qué es su perfil. Pasa un "test en
-rojo", Claude dice "mirá de nuevo", el test se pone verde y con "congelalo" la
-calle se frena en código verde mientras Claude termina de contar.
+entre una multitud y le explica a Lucas (Neo) qué es su perfil. Se le cruza un
+policía, aparece de repente una mujer de vestido rojo, Lucas se da vuelta a mirarla,
+Claude dice "mirá de nuevo" y es un agente; con "congelalo" la calle se frena en
+código verde mientras Claude termina de contar.
 
 Uso:
     pip install pillow numpy
@@ -318,7 +319,24 @@ def figure(h, frame, look, pose="walk"):
     if look.get("beard"):
         d.rectangle([hx - 1.3 * u, hy + .6 * u, hx + .4 * u, hy + 1.5 * u], fill=look["beard"])
     if look.get("skirt"):
-        d.polygon([(cx - 2 * u, 9 * u), (cx + 1.8 * u, 9 * u), (cx + 2.8 * u, 16 * u), (cx - 3 * u, 16 * u)], fill=look["skirt"])
+        sl = look.get("skirt_len", 16) * u
+        d.polygon([(cx - 2 * u, 9 * u), (cx + 1.8 * u, 9 * u), (cx + 2.8 * u + stride * .2, sl), (cx - 3 * u - stride * .3, sl)],
+                  fill=look["skirt"])
+    if look.get("long_hair"):                                          # pelo largo cayendo por la espalda
+        d.polygon([(hx - .2 * u, hy - 1.6 * u), (hx + 1.8 * u, hy - 1.2 * u), (hx + 2.2 * u, hy + 3.6 * u),
+                   (hx + .4 * u, hy + 3.2 * u)], fill=hair)
+        d.chord([hx - 1.7 * u, hy - 2.2 * u, hx + 1.8 * u, hy + 1.0 * u], 150, 360, fill=hair)
+    if look.get("cap"):                                                # gorra de policía con visera
+        d.rectangle([hx - 1.6 * u, hy - 2.4 * u, hx + 1.8 * u, hy - 1.0 * u], fill=look["cap"])
+        d.rectangle([hx - 1.6 * u, hy - 1.3 * u, hx + 1.8 * u, hy - 1.0 * u], fill=(10, 10, 12))
+        d.rectangle([hx - 2.6 * u, hy - 1.2 * u, hx - 1.2 * u, hy - .8 * u], fill=(10, 10, 12))
+        d.rectangle([hx - 1.0 * u, hy - 2.1 * u, hx - .4 * u, hy - 1.5 * u], fill=(220, 180, 60))
+    if look.get("badge"):
+        d.rectangle([cx - 1.3 * u, 6 * u, cx - .6 * u, 6.8 * u], fill=look["badge"])
+    if look.get("belt"):
+        d.rectangle([cx - 2.1 * u, 11.6 * u, cx + 1.9 * u, 12.3 * u], fill=look["belt"])
+    if look.get("earpiece"):
+        d.line([(hx + .6 * u, hy), (hx + 1.0 * u, hy + 2.4 * u)], fill=look["earpiece"], width=1)
     return im
 
 
@@ -435,33 +453,31 @@ for i in range(11):
     crowd_back.append(f'<g style="{track(i * SPAN / 11 + random.uniform(-8, 8), v, SPAN, MARGIN, 102)}">{s}</g>')
 body.extend(crowd_back)
 
-# ============================================================ el "test en rojo"
-RED = dict(coat=(196, 30, 44), skin=(232, 196, 166), hair=(196, 150, 70), skirt=(206, 34, 48),
-           pants=(232, 196, 166), shoe=(150, 20, 30), coat_len=9.5)
-GREEN = dict(RED, coat=(40, 170, 80), skirt=(46, 186, 90), shoe=(20, 110, 50))
-TH, TURN = 40, 18.6
-tred = [figure(TH, 0, RED), figure(TH, 1, RED)]
-tgrn = [figure(TH, 0, GREEN), figure(TH, 1, GREEN)]
-
-
-def badge(text, fg, bg, x, y):
-    w = len(text) * 4 + 3
-    return rect(x, y, w, 8, bg) + f'<g fill="{fg}">{runs(mini_px(text, x + 2, y + 2))}</g>'
-
-
-tw = tred[0].width
-t_red = (f'<g style="{window(0, TURN)}">{sprite_group(tred, 0, -TH, flip=True)}'
-         f'{badge("FAIL", "#ffe0e0", "#c41e2c", tw // 2 - 9, -TH - 11)}</g>')
-css.append(f"@keyframes tgv{{0%,{pct(TURN) - .001:.3f}%{{opacity:0}}{pct(TURN):.3f}%{{opacity:1}}{pct(TURN + .15):.3f}%{{opacity:.2}}"
-           f"{pct(TURN + .3):.3f}%,{pct(30.6):.3f}%{{opacity:1}}{pct(31.6):.3f}%,100%{{opacity:0}}}}")
-t_grn = (f'<g opacity="0" style="animation:tgv {T}s infinite linear">'
-         f'{sprite_group(tgrn, 0, -TH, freeze_img=frozen(tgrn[0]), flip=True)}'
-         f'<g style="{WALK_VIS}">{badge("PASS", "#e0ffe8", "#1e9a48", tw // 2 - 9, -TH - 11)}</g>'
-         f'<g opacity="0" style="{FRZ_VIS}">{badge("PASS", "#021a0c", "#7dffa0", tw // 2 - 9, -TH - 11)}</g></g>')
-kt = nid("tt")
-css.append(f"@keyframes {kt}{{0%,{pct(11):.3f}%{{transform:translate(-30px,103px)}}{pct(F0):.3f}%,{pct(F1):.3f}%"
-           f"{{transform:translate(136px,103px)}}100%{{transform:translate(236px,103px)}}}}")
-body.append(f'<g style="transform:translate(-30px,103px);animation:{kt} {T}s infinite linear">{t_red}{t_grn}</g>')
+# ============================================================ la mujer del vestido rojo (y el agente)
+RED = dict(coat=(200, 28, 44), shirt=(200, 28, 44), skin=(236, 200, 170), hair=(226, 186, 96), long_hair=True,
+           skirt=(214, 32, 50), skirt_len=19.5, pants=(236, 200, 170), shoe=(160, 16, 30), coat_len=9.5)
+AGENT = dict(coat=(36, 40, 40), shirt=(226, 230, 222), skin=(214, 172, 140), hair=(28, 24, 20), tie=(8, 8, 8),
+             shades=(6, 6, 8), earpiece=(200, 200, 190), pants=(30, 32, 34), coat_len=13.5)
+WH, APPEAR, TURN = 50, 13.0, 18.6
+WY = 110                                            # carril medio: entre la multitud y los protagonistas
+wred = [figure(WH, 0, RED), figure(WH, 1, RED)]
+wagt = [figure(WH, 0, AGENT), figure(WH, 1, AGENT)]
+# aparece de golpe (con un parpadeo) y cruza; al "mirá de nuevo" se vuelve agente
+css.append(f"@keyframes wred{{0%,{pct(APPEAR) - .001:.3f}%{{opacity:0}}{pct(APPEAR):.3f}%{{opacity:1}}"
+           f"{pct(APPEAR + .08):.3f}%{{opacity:.15}}{pct(APPEAR + .16):.3f}%,{pct(TURN) - .001:.3f}%{{opacity:1}}"
+           f"{pct(TURN):.3f}%,100%{{opacity:0}}}}")
+css.append(f"@keyframes wagt{{0%,{pct(TURN) - .001:.3f}%{{opacity:0}}{pct(TURN):.3f}%{{opacity:1}}{pct(TURN + .1):.3f}%{{opacity:.2}}"
+           f"{pct(TURN + .2):.3f}%{{opacity:1}}{pct(TURN + .3):.3f}%{{opacity:.4}}{pct(TURN + .4):.3f}%,99.9%{{opacity:1}}100%{{opacity:0}}}}")
+w_red = f'<g opacity="0" style="animation:wred {T}s infinite linear">{sprite_group(wred, 0, -WH, step=.42, flip=True)}</g>'
+w_agt = (f'<g opacity="0" style="animation:wagt {T}s infinite linear">'
+         f'{sprite_group(wagt, 0, -WH, step=.42, freeze_img=frozen(wagt[0]), flip=True)}</g>')
+WV, WX0 = 25, 50
+x_at = lambda t: WX0 + WV * (t - APPEAR)
+kw = nid("wk")
+css.append(f"@keyframes {kw}{{0%,{pct(APPEAR):.3f}%{{transform:translate({WX0}px,{WY}px)}}"
+           f"{pct(F0):.3f}%,{pct(F1):.3f}%{{transform:translate({x_at(F0):.1f}px,{WY}px)}}"
+           f"100%{{transform:translate({x_at(F0) + WV * (T - F1):.1f}px,{WY}px)}}}}")
+body.append(f'<g style="transform:translate({WX0}px,{WY}px);animation:{kw} {T}s infinite linear">{w_red}{w_agt}</g>')
 
 # ============================================================ protagonistas
 PH = 64
@@ -486,7 +502,22 @@ CLX, LUX = 92, 150
 for x_ in (CLX, LUX):
     body.append(f'<ellipse cx="{x_ + cl[0].width / 2}" cy="{FEET}" rx="10" ry="2" fill="#000" opacity=".22"/>')
 body.append(protagonist(cl, cl_idle, CLX))
-body.append(protagonist(lu, lu_idle, LUX, .3))
+LOOK0, LOOK1 = 16.6, 19.0                          # Lucas se da vuelta para mirarla
+css.append(f"@keyframes lturn{{0%,{pct(LOOK0):.3f}%{{transform:scaleX(1)}}{pct(LOOK0) + .001:.3f}%,{pct(LOOK1):.3f}%"
+           f"{{transform:scaleX(-1)}}{pct(LOOK1) + .001:.3f}%,100%{{transform:scaleX(1)}}}}")
+body.append(f'<g style="transform-origin:{LUX + lu[0].width / 2}px 0;animation:lturn {T}s infinite linear">'
+            f'{protagonist(lu, lu_idle, LUX, .3)}</g>')
+
+# ============================================================ el policía que se le cruza a Lucas
+COP = dict(coat=(30, 40, 74), shirt=(150, 170, 200), skin=(196, 150, 118), hair=(30, 24, 20), cap=(26, 34, 64),
+           badge=(230, 190, 70), belt=(14, 14, 16), pants=(24, 32, 60), coat_len=13)
+CPH, CPY, C0, C1 = 66, 123, 3.0, 12.0
+cop = [figure(CPH, 0, COP), figure(CPH, 1, COP)]
+kc = nid("cop")
+css.append(f"@keyframes {kc}{{0%,{pct(C0):.3f}%{{transform:translate(-50px,{CPY}px)}}{pct(C1):.3f}%,100%"
+           f"{{transform:translate(330px,{CPY}px)}}}}")
+body.append(f'<g style="transform:translate(-50px,{CPY}px);animation:{kc} {T}s infinite linear">'
+            f'{sprite_group(cop, 0, -CPH, step=.5, flip=True)}</g>')
 
 # ============================================================ multitud (fila de adelante, fuera de foco)
 for i in range(2):
@@ -505,7 +536,7 @@ DIALOG = [
     (0.3, 4.4, "LUCAS", ["DONDE ESTAMOS?"]),
     (4.4, 9.2, "CLAUDE", ["EN TU PERFIL, LUCAS. ES UN SISTEMA.", "DE DIA: SOFTWARE ENGINEER EN HUMAND."]),
     (9.2, 14.0, "CLAUDE", ["BASE: CORDOBA, ARGENTINA.", "DE NOCHE: LIMAO, IA PARA PYMES."]),
-    (14.0, 17.6, "CLAUDE", ["ESTABAS MIRANDO AL TEST EN ROJO?"]),
+    (14.0, 17.6, "CLAUDE", ["ESTABAS MIRANDO A LA MUJER DE ROJO?"]),
     (17.6, 20.0, "CLAUDE", ["MIRA DE NUEVO."]),
     (20.0, 24.0, "CLAUDE", ["CONGELALO.", "ESTO ES UN PROGRAMA DE ENTRENAMIENTO."]),
     (24.0, 28.0, "CLAUDE", ["INVENTARIO: MATE CEBADO, CURIOSIDAD X99.", "EN GITHUB DESDE 2019. TU COPILOTO: YO."]),
