@@ -999,81 +999,90 @@ for px in (372, 468, 566):                                              # postes
 
 
 # ---------- vegetación
+TREE_PAL = [(150, 184, 46), (104, 152, 34), (62, 116, 40), (34, 84, 52), (20, 54, 50), (14, 32, 36)]
+BARK = [(156, 96, 74), (116, 66, 54), (80, 44, 42), (52, 28, 32)]
+
+
 def street_tree(height, seed, young=True, parts=False):
-    """Plátano de sombra de vereda neoyorquina: tronco grueso de corteza manchada, ramas altas y copa
-    ovalada, más alta que ancha y densa (dibujado a 4x)."""
-    S4 = 4
-    Hh = height * S4
-    w_ = int(height * .5) * S4
-    im = Image.new("RGBA", (w_, int(Hh) + S4), (0, 0, 0, 0)); d = ImageDraw.Draw(im)
+    """Árbol de vereda en pixel art (estilo de referencia): copa hecha de masas de follaje con bandas de
+    sombreado planas (lima arriba, verde azulado casi negro abajo) y bordes dentados de hojas; tronco
+    marrón rojizo retorcido que se abre en ramas entre las masas. Dibujado a resolución final."""
     rt = random.Random(seed)
-    cx_t, base = w_ / 2, Hh
-    trunk_top = base - Hh * .5
-    lean_ = rt.uniform(-.015, .015) * Hh
-    limb(d, (cx_t, base), (cx_t + lean_, trunk_top), .1 * Hh, .07 * Hh, (96, 88, 74))      # tronco grueso
-    d.polygon([(cx_t - .07 * Hh, base), (cx_t + .07 * Hh, base), (cx_t + .05 * Hh, base - .04 * Hh),
-               (cx_t - .05 * Hh, base - .04 * Hh)], fill=(88, 80, 66))                      # base que se ensancha
-    for _ in range(26):                                      # corteza manchada del plátano
-        t_ = rt.uniform(.05, 1)
-        yy_ = base - t_ * (base - trunk_top)
-        xx_ = cx_t + lean_ * t_ + rt.uniform(-.035, .035) * Hh
-        r_ = rt.uniform(.008, .018) * Hh
-        d.ellipse([xx_ - r_, yy_ - r_ * 1.4, xx_ + r_, yy_ + r_ * 1.4],
-                  fill=rt.choice([(176, 168, 140), (150, 146, 120), (70, 66, 56)]))
-    d.line([(cx_t + .035 * Hh, base), (cx_t + .03 * Hh + lean_, trunk_top)], fill=(60, 54, 46), width=max(1, int(.012 * Hh)))
-    for a_ in (-.55, -.2, .15, .5):                          # ramas altas
-        ex, ey = cx_t + lean_ + np.sin(a_) * .2 * Hh, trunk_top - np.cos(a_) * .2 * Hh
-        limb(d, (cx_t + lean_, trunk_top + .02 * Hh), (ex, ey), .045 * Hh, .02 * Hh, (88, 80, 68))
-    greens = [(34, 62, 38), (46, 82, 46), (60, 102, 54), (78, 124, 62), (100, 146, 74), (128, 170, 90)]
-    ccx, ccy = cx_t + lean_, trunk_top - .2 * Hh               # copa ovalada (alta)
-    RX, RY = .22 * Hh, .3 * Hh
-    crown = Image.new("RGBA", im.size, (0, 0, 0, 0)); dc = ImageDraw.Draw(crown)
-    leaf = .016 * Hh                                          # tamaño de una hoja
+    Ht = int(height)
+    Wt = int(Ht * .72) | 1
+    cxt = Wt / 2
+    mir = -1 if rt.random() < .5 else 1
+    jit = lambda v, a=.02: v + rt.uniform(-a, a)
+    # masas de follaje: (cx, cy, rx, ry) en fracciones de la altura; capa 0 = atrás
+    back = [(0, .27, .25, .19), (-.13, .44, .2, .14), (.13, .45, .2, .14)]
+    front = [(-.21, .62, .16, .085), (.21, .635, .15, .085),                      # masas laterales bajas
+             (-.17, .36, .14, .11), (.16, .34, .13, .11), (.0, .44, .15, .11), (.08, .49, .12, .09),
+             (-.07, .17, .12, .095), (.07, .1, .1, .085), (.15, .22, .1, .085)]   # copete
+    def place(lst):
+        return [(cxt + mir * jit(x) * Ht, jit(y) * Ht, jit(rx, .015) * Ht, jit(ry, .012) * Ht) for x, y, rx, ry in lst]
+    back, front = place(back), place(front)
+    yy_, xx_ = np.mgrid[0:Ht, 0:Wt].astype(float)
+    nz = np.random.default_rng(seed).random((Ht, Wt))
 
-    def clump(x0, y0, rad, lvl):
-        """Racimo de hojas: varias hojas chicas, sombra abajo a la derecha y luz arriba a la izquierda."""
-        n_ = int(6 + rad / leaf * 2)
-        for _ in range(n_):
-            a2 = rt.uniform(0, 2 * np.pi); r2 = rt.uniform(0, 1) ** .7 * rad
-            lx2, ly2 = x0 + np.cos(a2) * r2, y0 + np.sin(a2) * r2 * .85
-            lit = -(np.cos(a2) + np.sin(a2)) * r2 / max(rad, 1e-6)          # + hacia arriba-izquierda
-            k_ = int(np.clip(lvl * 4 + lit * 1.6 + rt.uniform(-.6, .6), 0, 5))
-            lw_, lh_ = leaf * rt.uniform(.9, 1.4), leaf * rt.uniform(.6, .9)
-            dc.ellipse([lx2 - lw_, ly2 - lh_, lx2 + lw_, ly2 + lh_], fill=greens[k_])
+    def render(clumps, darker=0.0):
+        rgba = np.zeros((Ht, Wt, 4))
+        for cx_, cy_, rx_, ry_ in clumps:
+            dx_, dy_ = (xx_ + .5 - cx_) / rx_, (yy_ + .5 - cy_) / ry_
+            dd = dx_ ** 2 + dy_ ** 2
+            edge = 1 + (nz - .5) * .45 + .12 * np.sin(np.arctan2(dy_, dx_) * 7 + cx_)   # borde dentado de hojas
+            m = dd < edge
+            sh = dy_ * .85 - dx_ * .3 + (nz - .5) * .38 + darker                       # luz arriba a la izquierda
+            band = np.digitize(sh, [-.55, -.18, .18, .52, .85])
+            col = np.array(TREE_PAL)[band]
+            col = np.where(((dd > edge - .22) & (dy_ > .1))[..., None], TREE_PAL[5], col)   # contorno oscuro abajo
+            rgba[m, :3] = col[m]
+            rgba[m, 3] = 255
+        return rgba
 
-    # capa de fondo oscura (masa de la copa) y racimos encima, de atrás hacia adelante
-    dc.ellipse([ccx - RX * .92, ccy - RY * .92, ccx + RX * .92, ccy + RY * .92], fill=greens[0])
-    pts_ = []
-    for _ in range(70):
-        ang = rt.uniform(0, 2 * np.pi); rr = rt.uniform(0, 1) ** .6
-        pts_.append((ccx + np.cos(ang) * rr * RX, ccy + np.sin(ang) * rr * RY))
-    pts_.sort(key=lambda q: q[1])
-    for lx_, ly_ in pts_:
-        lvl = (ccy + RY - ly_) / (2 * RY)
-        clump(lx_, ly_, rt.uniform(.035, .06) * Hh, lvl)
-    for _ in range(40):                                       # hojas sueltas en el borde: rompen la silueta
-        ang = rt.uniform(0, 2 * np.pi)
-        lx_, ly_ = ccx + np.cos(ang) * RX * rt.uniform(.95, 1.12), ccy + np.sin(ang) * RY * rt.uniform(.95, 1.1)
-        lvl = (ccy + RY - ly_) / (2 * RY)
-        k_ = int(np.clip(lvl * 4 - .5 + rt.uniform(-.8, .8), 0, 5))
-        dc.ellipse([lx_ - leaf, ly_ - leaf * .7, lx_ + leaf, ly_ + leaf * .7], fill=greens[k_])
-    for _ in range(12):                                       # huecos: se ven ramitas y el cielo de atrás
-        lx_, ly_ = ccx + rt.uniform(-.55, .55) * RX, ccy + rt.uniform(-.3, .6) * RY
-        r_ = rt.uniform(.012, .02) * Hh
-        dc.ellipse([lx_ - r_, ly_ - r_, lx_ + r_, ly_ + r_], fill=(28, 46, 32))
-        dc.line([(lx_ - r_, ly_ + r_ * .5), (lx_ + r_, ly_ - r_ * .3)], fill=(84, 74, 62), width=max(1, int(.006 * Hh)))
+    # tronco retorcido con ramas
+    tr = np.zeros((Ht, Wt, 4))
+    timg = Image.new("RGBA", (Wt, Ht), (0, 0, 0, 0)); td = ImageDraw.Draw(timg)
+    base_x = cxt + mir * rt.uniform(-.02, .02) * Ht
+    path = [(base_x, Ht - 1), (base_x + mir * .03 * Ht, .86 * Ht), (base_x - mir * .015 * Ht, .74 * Ht),
+            (cxt + mir * .02 * Ht, .62 * Ht)]
+    wid = [.085 * Ht, .07 * Ht, .062 * Ht, .052 * Ht]
+    for (p0, p1), (w0, w1) in zip(zip(path, path[1:]), zip(wid, wid[1:])):
+        limb(td, p0, p1, w0, w1, BARK[1])
+    for ex, ey, w0 in ((-.15, .58, .04), (.15, .6, .035), (.02, .42, .04), (-.08, .3, .028), (.1, .32, .026)):
+        limb(td, path[-1], (cxt + mir * ex * Ht, ey * Ht), w0 * Ht, w0 * .45 * Ht, BARK[1])
+    td.polygon([(base_x - .07 * Ht, Ht - 1), (base_x + .07 * Ht, Ht - 1), (base_x + .04 * Ht, Ht - .05 * Ht),
+                (base_x - .04 * Ht, Ht - .05 * Ht)], fill=BARK[1])                       # raíces
+    ta = np.asarray(timg, dtype=float)
+    tm = ta[..., 3] > 0
+    left = tm & ~np.roll(tm, 1, 1)
+    right = tm & ~np.roll(tm, -1, 1)
+    tr[tm, :3] = BARK[1]
+    tr[np.roll(left, 1, 1) & tm, :3] = BARK[0]                                         # canto iluminado
+    tr[right | np.roll(right, -1, 1) & tm, :3] = BARK[2]                                # lado en sombra
+    streak = tm & (nz < .18)
+    tr[streak, :3] = BARK[2]
+    tr[tm & (nz > .93), :3] = BARK[3]
+    tr[tm, 3] = 255
+    back_l = render(back, darker=.45)                                                    # masas de atrás, más oscuras
+    front_l = render(front)
+    to_im = lambda a_: Image.fromarray(a_.astype(np.uint8), "RGBA")
     if parts:
-        flick = Image.new("RGBA", im.size, (0, 0, 0, 0)); df = ImageDraw.Draw(flick)
-        flick2 = Image.new("RGBA", im.size, (0, 0, 0, 0)); df2 = ImageDraw.Draw(flick2)
-        for dd in (df, df2):                                  # hojas que se dan vuelta con la brisa
-            for _ in range(22):
-                ang = rt.uniform(np.pi * .9, np.pi * 2.1); rr = rt.uniform(.3, 1)
-                lx_, ly_ = ccx + np.cos(ang) * rr * RX, ccy + np.sin(ang) * rr * RY
-                dd.ellipse([lx_ - leaf, ly_ - leaf * .6, lx_ + leaf, ly_ + leaf * .6], fill=(170, 200, 120))
-        f_ = lambda x_: _finish(x_, int(w_ / S4), int(im.height / S4))
-        return f_(im), f_(crown), f_(flick), f_(flick2), (ccx / S4, trunk_top / S4)
-    im.alpha_composite(crown)
-    return _finish(im, int(w_ / S4), int(im.height / S4))
+        flick, flick2 = np.zeros((Ht, Wt, 4)), np.zeros((Ht, Wt, 4))
+        lit = (front_l[..., 3] > 0) & np.isin(front_l[..., 1], [TREE_PAL[1][1], TREE_PAL[2][1]])
+        ys_, xs_ = np.nonzero(lit)
+        for fl_ in (flick, flick2):                                                      # hojas que se dan vuelta
+            sel = rt.sample(range(len(ys_)), min(len(ys_), Ht // 2))
+            fl_[ys_[sel], xs_[sel], :3] = TREE_PAL[0]
+            fl_[ys_[sel], xs_[sel], 3] = 255
+        crown = back_l.copy()
+        trunk = tr
+        # el tronco va entre las masas de atrás y las de adelante; para que la copa se mezca entera,
+        # se devuelven tronco, copa de atrás y copa de adelante por separado
+        return to_im(trunk), (to_im(back_l), to_im(front_l)), to_im(flick), to_im(flick2), (path[-1][0], path[-1][1])
+    out = back_l.copy()
+    m_ = tr[..., 3] > 0; out[m_] = tr[m_]
+    m_ = front_l[..., 3] > 0; out[m_] = front_l[m_]
+    return to_im(out)
 
 
 def planter(width, seed):
@@ -1991,18 +2000,20 @@ body.append(f'<g style="{track(TILE0, NEAR_SPEED, TW, 0, 0)}">{dump_svg}</g>')
 
 # ============================================================ árboles de nuestra vereda (capa propia)
 OUR_TREE_H = 92                                              # ~5 m junto al cordón (la copa sale del cuadro)
-css.append("@keyframes sway{0%,100%{transform:rotate(-1.1deg)}50%{transform:rotate(1.3deg)}}"
+css.append("@keyframes sway{0%,100%{transform:rotate(-.9deg)}50%{transform:rotate(1.1deg)}}"
            "@keyframes rustle{0%,100%{transform:translate(0,0)}33%{transform:translate(.6px,-.3px)}66%{transform:translate(-.4px,.2px)}}"
            "@keyframes flA{0%,49.9%{opacity:1}50%,100%{opacity:0}}@keyframes flB{0%,49.9%{opacity:0}50%,100%{opacity:1}}")
 trees_svg = ""
 for i_, tx_ in enumerate(OUR_TREES):
-    trunk_i, crown_i, fl1, fl2, (px_c, py_c) = street_tree(OUR_TREE_H, 90 + i_, parts=True)
+    trunk_i, (cb_i, cf_i), fl1, fl2, (px_c, py_c) = street_tree(OUR_TREE_H, 90 + i_, parts=True)
     x0_t, y0_t = tx_ - trunk_i.width / 2, GROUND + 5 - trunk_i.height
-    ox_, oy_ = x0_t + px_c, y0_t + py_c                     # pivote: punta del tronco
+    ox_, oy_ = x0_t + px_c, y0_t + py_c                     # pivote: donde el tronco se abre en ramas
     sw_d, sw_dl = 4.2 + i_ * .7, -i_ * 1.3
-    trees_svg += (image(trunk_i, x0_t, y0_t, up=1) +
-                  f'<g style="transform-origin:{ox_:.1f}px {oy_:.1f}px;animation:sway {sw_d:.1f}s {sw_dl:.1f}s infinite ease-in-out">'
-                  f'<g style="animation:rustle {1.7 + i_ * .3:.1f}s infinite ease-in-out">{image(crown_i, x0_t, y0_t, up=1)}'
+    swing = f'transform-origin:{ox_:.1f}px {oy_:.1f}px;animation:sway {sw_d:.1f}s {sw_dl:.1f}s infinite ease-in-out'
+    trees_svg += (f'<g style="{swing}">{image(cb_i, x0_t, y0_t, up=1)}</g>'
+                  + image(trunk_i, x0_t, y0_t, up=1) +
+                  f'<g style="{swing}"><g style="animation:rustle {1.7 + i_ * .3:.1f}s infinite ease-in-out">'
+                  f'{image(cf_i, x0_t, y0_t, up=1)}'
                   f'<g style="animation:flA {1.1 + i_ * .2:.1f}s infinite steps(1)">{image(fl1, x0_t, y0_t, up=1)}</g>'
                   f'<g style="animation:flB {1.1 + i_ * .2:.1f}s infinite steps(1)">{image(fl2, x0_t, y0_t, up=1)}</g>'
                   f'</g></g>')
