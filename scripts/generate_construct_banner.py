@@ -195,6 +195,8 @@ def track(x0, v, span, margin, y):
 
 # ============================================================ fondo: ciudad del constructo (de día, verdosa)
 yy, xx = np.mgrid[0:H, 0:W]
+LANE_FAR, LANE_NEAR = 99, 104                             # carriles de la vereda: van (derecha) / vienen (izquierda, como nosotros)
+ZOOM = 1.25                                              # cámara más cerca: la escena se agranda hacia el horizonte
 PERSP_K, HORIZON = .67, 46                               # alto de una persona = PERSP_K * (pies - HORIZON)
 GROUND = 96                                              # nuestra vereda (la avenida suma un carril de estacionamiento)
 NEAR_LANE = 91                                           # base del carril de circulación cercano
@@ -631,7 +633,7 @@ reg[cm, :3] = corr[cm, :3]; reg[cm, 3] = 255
 srng = np.random.default_rng(1212)
 sr = random.Random(1212)
 near[GROUND:, :, 3] = 255
-SW_ROWS = [GROUND + 3, GROUND + 11, GROUND + 21, H]                    # filas de losas de igual profundidad (en perspectiva)
+SW_ROWS = [GROUND + 3, GROUND + 8, GROUND + 14, H]                     # filas de losas de igual profundidad (en perspectiva)
 SLAB = 30                                                               # ancho de losa (~1.5 m)
 grain = srng.normal(0, 1, (H, W))
 SW_OFF = 7                                                              # juntas alineadas: grilla, no ladrillo
@@ -713,7 +715,7 @@ manhole(120, GROUND + 7, 6, 2.4)
 #  - sendas para cruzar la avenida a cada lado de la bocacalle (WR < |X| < WC): rayas a lo largo
 #    de la avenida, apiladas en profundidad; la línea divisoria se corta en el cruce.
 xs_all = np.arange(W) + .5
-XW_END = H - 15                                          # fin de las rayas de nuestra senda (antes de la franja negra)
+XW_END = H + 50                                           # fin de las rayas de nuestra senda (antes de la franja negra)
 for y_ in range(AVE_TOP + 4, H):
     f_ = (y_ + .5 - VPY) / HC
     Xr = (xs_all - GC) / f_                              # posición real a lo ancho de la calle del fondo
@@ -1262,21 +1264,26 @@ hyd_svg = (f'<g style="{WALK_VIS}">{image(hyd, HX, HB - 14, up=1)}</g>'
 hyd_svg = "".join(f'<g transform="translate({off} 0)">{hyd_svg}</g>' for off in (0, -W))
 body.append(f'<g style="{track(TILE0, NEAR_SPEED, W, 0, 0)}">{hyd_svg}</g>')
 
-# ============================================================ multitud (fila de atrás)
-CROWD_Y = 102
+# ============================================================ multitud: dos carriles de vereda
+# Carril de enfrente: gente que va hacia la derecha. Carril cercano (el nuestro): gente que viene hacia
+# la izquierda como Claude y Lucas, un poco más rápido, pasándolos por detrás.
 SPAN, MARGIN = W + 60, 30
 crowd_back = []
 for i in range(11):
     kind = KINDS[i % len(KINDS)]
     look = crowd_look(kind, random)
     h = random.randint(33, 37) if look.get("female") else random.randint(36, 40)
-    h = round(PERSP_K * (CROWD_Y - HORIZON) * h / 38)         # escala de la regla de perspectiva
-    k = random.choice([-1, 1, 1, 2, 2, 3])
+    k = random.choice([-1, 1, 1, 2, 2, 3])                     # (se sortea igual para no alterar la secuencia)
+    near_lane = i % 3 == 2
+    ly = LANE_NEAR if near_lane else LANE_FAR
+    k = -1 if near_lane else max(1, abs(k))
+    h = round(PERSP_K * (ly - HORIZON) * h / 38)               # escala de la regla de perspectiva
     v = k * SPAN / WALK
     flip = k > 0                                   # los que van a la derecha miran a la derecha
     fr = [figure(h, 0, look), figure(h, 1, look)]
     s = sprite_group(fr, 0, -h, step=random.choice([.45, .5, .55]), freeze_img=frozen(fr[0]), flip=flip)
-    crowd_back.append(f'<g style="{track(i * SPAN / 11 + random.uniform(-8, 8), v, SPAN, MARGIN, CROWD_Y)}">{s}</g>')
+    crowd_back.append((ly, f'<g style="{track(i * SPAN / 11 + random.uniform(-8, 8), v, SPAN, MARGIN, ly)}">{s}</g>'))
+crowd_back = [g_ for _, g_ in sorted(crowd_back, key=lambda c: c[0])]   # el carril de enfrente se dibuja primero
 body.extend(crowd_back)
 
 # ============================================================ la mujer del vestido rojo (y el agente)
@@ -1336,7 +1343,7 @@ def woman_in_red(h, frame):
 
 AGENT = dict(coat=(36, 40, 40), shirt=(226, 230, 222), skin=(214, 172, 140), hair=(28, 24, 20), tie=(8, 8, 8),
              shades=(6, 6, 8), earpiece=(200, 200, 190), pants=(30, 32, 34), coat_len=13.5)
-WY = 110
+WY = LANE_FAR
 WH, APPEAR, TURN = round(PERSP_K * (WY - HORIZON)), 13.0, 18.6                                            # carril medio: entre la multitud y los protagonistas
 wred = [woman_in_red(WH, 0), woman_in_red(WH, 1)]
 wagt = [figure(WH, 0, AGENT), figure(WH, 1, AGENT)]
@@ -1358,7 +1365,7 @@ css.append(f"@keyframes {kw}{{0%,{pct(APPEAR):.3f}%{{transform:translate({WX0}px
 body.append(f'<g style="transform:translate({WX0}px,{WY}px);animation:{kw} {T}s infinite linear">{w_red}{w_agt}</g>')
 
 # ============================================================ protagonistas
-FEET = 118
+FEET = LANE_NEAR
 PH = round(PERSP_K * (FEET - HORIZON))                  # misma regla que el resto de la gente
 
 
@@ -1386,18 +1393,9 @@ css.append(f"@keyframes lturn{{0%,{pct(LOOK0):.3f}%{{transform:scaleX(1)}}{pct(L
 body.append(f'<g style="transform-origin:{LUX + lu[0].width / 2}px 0;animation:lturn {T}s infinite linear">'
             f'{protagonist(lu, lu_idle, LUX, .3)}</g>')
 
-# ============================================================ multitud (fila de adelante, fuera de foco)
-for i in range(2):
-    h = round(PERSP_K * (140 - HORIZON)) + random.randint(-2, 2)
-    look = crowd_look(["m_casual", "f_coat"][i], random)
-    dark = lambda c: tuple(int(16 + v * .12) for v in c) if c else c
-    look = {k_: (dark(v_) if isinstance(v_, tuple) else v_) for k_, v_ in look.items()}
-    fr = [figure(h, 0, look), figure(h, 1, look)]
-    s = sprite_group(fr, 0, -h, step=.4, freeze_img=frozen(fr[0]), flip=True)
-    FS = W + 420                                   # tramo largo: pasan de vez en cuando
-    v = 2 * FS / WALK
-    at_freeze = [10, 560][i]                       # fuera de cuadro al congelar: no tapan a los protagonistas
-    body.append(f'<g opacity=".93" style="{track(at_freeze - v * F0, v, FS, 100, 140)}">{s}</g>')
+# ============================================================ cámara más cerca
+scene_svg = "".join(body)
+body = [f'<g transform="translate({W / 2} {HORIZON}) scale({ZOOM}) translate({-W / 2} {-HORIZON})">{scene_svg}</g>']
 
 # ============================================================ viñeta, franjas y tinte verde
 defs.append('<radialGradient id="vig" cx=".5" cy=".5" r=".75"><stop offset=".55" stop-color="#000" stop-opacity="0"/>'
