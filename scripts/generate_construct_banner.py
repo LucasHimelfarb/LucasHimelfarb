@@ -294,7 +294,7 @@ def _finish(big, w, h):
 
 def vehicle_side(length, body, kind="sedan"):
     """Vehículo de perfil mirando a la izquierda. Altura con proporción real (auto ~1.45 m x 4.6 m)."""
-    ratio = {"sedan": .31, "taxi": .31, "police": .31, "van": .42, "bus": .30}[kind]
+    ratio = {"sedan": .31, "taxi": .31, "police": .31, "van": .42, "bus": .27}[kind]
     L, Hh = length * VS, length * ratio * VS
     top_pad = int(Hh * (.14 if kind in ("taxi", "police") else .02))
     im = Image.new("RGBA", (int(L), int(Hh) + top_pad + VS * 2), (0, 0, 0, 0)); d = ImageDraw.Draw(im)
@@ -303,19 +303,34 @@ def vehicle_side(length, body, kind="sedan"):
     glass, glass_hi = (46, 58, 64), (120, 140, 140)
     # sombra en el piso
     d.ellipse([L * .02, Hh + top_pad - Hh * .06, L * .98, Hh + top_pad + Hh * .07], fill=(0, 0, 0, 120))
-    if kind == "bus":
-        d.rounded_rectangle([0, top_pad, L - 1, Hh * .86 + top_pad], radius=Hh * .06, fill=mid)
-        d.rectangle([0, Hh * .62 + top_pad, L - 1, Hh * .86 + top_pad], fill=lo)
-        d.rectangle([0, Hh * .58 + top_pad, L - 1, Hh * .62 + top_pad], fill=hi)                       # franja
-        d.polygon(P([(.0, .08), (.07, .08), (.07, .52), (.0, .52)]), fill=glass)                       # parabrisas
-        x = .1
-        while x < .95:
-            d.rectangle(P([(x, .1), (x + .075, .48)])[0] + P([(x + .075, .48)])[0], fill=glass)
-            d.line(P([(x + .005, .12), (x + .03, .12)]), fill=glass_hi, width=VS)
-            x += .088
-        d.rectangle(P([(.14, .12), (.2, .84)])[0] + P([(.2, .84)])[0], fill=_shade(glass, 1.2))         # puerta
-        d.line(P([(.17, .12), (.17, .84)]), fill=dark, width=VS)
-        wheels = [(.16, .86), (.78, .86)]
+    if kind == "bus":                                   # colectivo de la MTA de Nueva York
+        white, white_sh, mta_blue = (234, 236, 232), (196, 200, 198), (24, 70, 160)
+        tint = (26, 30, 36)
+        d.rounded_rectangle([0, top_pad, L - 1, Hh * .88 + top_pad], radius=Hh * .14, fill=white)   # techo redondeado
+        d.rectangle(P([(.0, .66), (1, .88)])[0] + P([(1, .88)])[0], fill=white_sh)                    # zócalo
+        d.rounded_rectangle(P([(.66, -.02), (.9, .05)])[0] + P([(.9, .05)])[0], radius=VS, fill=(210, 214, 212))  # A/A
+        d.polygon(P([(.005, .2), (.05, .1), (.05, .56), (.005, .6)]), fill=tint)                       # parabrisas
+        d.line(P([(.012, .25), (.04, .14)]), fill=(110, 130, 134), width=VS)
+        d.rectangle(P([(.012, .05), (.1, .1)])[0] + P([(.1, .1)])[0], fill=(30, 24, 18))               # cartel de destino
+        for lx_ in np.arange(.016, .096, .008):
+            d.rectangle(P([(lx_, .062), (lx_ + .004, .088)])[0] + P([(lx_ + .004, .088)])[0], fill=(255, 150, 40))
+        d.rectangle(P([(.12, .14), (.94, .5)])[0] + P([(.94, .5)])[0], fill=tint)                     # banda de ventanas
+        for wx_ in np.arange(.2, .94, .085):
+            d.line(P([(wx_, .14), (wx_, .5)]), fill=(70, 76, 80), width=max(1, VS // 2))
+            d.line(P([(wx_ + .01, .17), (wx_ + .035, .17)]), fill=(90, 104, 110), width=max(1, VS // 2))
+        for dx0, dx1 in ((.055, .115), (.5, .56)):                                                     # puertas
+            d.rectangle(P([(dx0, .14), (dx1, .84)])[0] + P([(dx1, .84)])[0], fill=(44, 52, 58))
+            d.line(P([((dx0 + dx1) / 2, .14), ((dx0 + dx1) / 2, .84)]), fill=(180, 184, 184), width=max(1, VS // 2))
+            d.rectangle(P([(dx0, .5), (dx1, .54)])[0] + P([(dx1, .54)])[0], fill=(180, 184, 184))
+        d.rectangle(P([(.0, .56), (1, .63)])[0] + P([(1, .63)])[0], fill=mta_blue)                    # franja azul MTA
+        d.rectangle(P([(.0, .635), (1, .65)])[0] + P([(1, .65)])[0], fill=(120, 160, 220))
+        for gx_ in np.arange(.9, .99, .012):                                                          # rejilla del motor
+            d.line(P([(gx_, .68), (gx_, .84)]), fill=(120, 124, 124), width=max(1, VS // 2))
+        d.line(P([(.0, .3), (-.01, .3)]), fill=(30, 30, 30), width=VS)                                 # brazo del espejo
+        d.rectangle(P([(.0, .7), (.03, .78)])[0] + P([(.03, .78)])[0], fill=(250, 244, 200))           # faro
+        d.rectangle(P([(.975, .6), (1, .7)])[0] + P([(1, .7)])[0], fill=(220, 30, 36))                 # luz trasera
+        d.rectangle(P([(.0, .82), (1, .88)])[0] + P([(1, .88)])[0], fill=(54, 56, 58))                 # paragolpes/zócalo
+        wheels = [(.16, .87), (.74, .87)]
         r = Hh * .12
     else:
         if kind == "van":
@@ -511,6 +526,8 @@ def street_corridor():
         g[dash] = (210, 204, 150)
         far_xw = (zg >= 86) & (zg < Z0 - .5) & (X < WR - 1.5) & (((X + WR) % 7) < 3.6)   # senda de enfrente
         g[far_xw] = (226, 228, 214)
+        stop_far = (zg >= 101) & (zg < 104.5) & (sgn < 0) & (X < WR - .3)                    # línea de detención
+        g[stop_far] = (236, 238, 228)
         g[(X <= WR) & (X > WR - 1.5)] -= 10                   # sombra del cordón
         put(np.isfinite(zg), zg, g)
 
@@ -695,6 +712,7 @@ near[HB - 14 + ys_h, HX + xs_h, :3] = ha[ys_h, xs_h, :3]
 #  - sendas para cruzar la avenida a cada lado de la bocacalle (WR < |X| < WC): rayas a lo largo
 #    de la avenida, apiladas en profundidad; la línea divisoria se corta en el cruce.
 xs_all = np.arange(W) + .5
+XW_END = H - 12                                          # fin de las rayas de nuestra senda (antes de la franja negra)
 for y_ in range(AVE_TOP + 4, H):
     f_ = (y_ + .5 - VPY) / HC
     Xr = (xs_all - GC) / f_                              # posición real a lo ancho de la calle del fondo
@@ -706,11 +724,20 @@ for y_ in range(AVE_TOP + 4, H):
             near[y_, aX < WC + 2, :3] = (64, 70, 68)     # la línea divisoria se corta en el cruce
         cross = (aX > WR + 1) & (aX < WC - 1) & ((z_ % 6) < 2.6) & (y_ > AVE_TOP + 5) & (y_ < GROUND - 1)
         near[y_, cross, :3] = (220, 222, 210)
+        # líneas de detención antes de cada senda de la avenida, según el sentido del carril:
+        # carril de enfrente (va a la izquierda) llega por la derecha; el cercano (va a la derecha) por la izquierda
+        sw_ = max(1.0, 1.6 / f_)
+        if AVE_TOP + 5 <= y_ < AVE_TOP + 11:
+            near[y_, (Xr > WC + 1) & (Xr <= WC + 1 + sw_), :3] = (236, 238, 228)
+        elif AVE_TOP + 11 < y_ < GROUND - 1:
+            near[y_, (Xr < -WC - 1) & (Xr >= -WC - 1 - sw_), :3] = (236, 238, 228)
     else:                                                # nuestra vereda
         near[y_, road, :3] = (70, 76, 74)
-        if y_ >= GROUND + 2:
+        if GROUND + 2 <= y_ < XW_END:
             stripe = (aX < WR - 1.5) & (((Xr + WR) % 7) < 3.6)
             near[y_, stripe, :3] = (226, 228, 214)
+        elif XW_END + 1 <= y_ < XW_END + 3:                # línea de detención del carril que viene de la cámara
+            near[y_, (Xr > 0) & (Xr < WR - .5), :3] = (236, 238, 228)
         curb = (aX > WR) & (aX <= WR + max(.8, 1.2 / f_))
         near[y_, curb, :3] = (200, 202, 196)
 for _ in range(3):                                                      # postes / farolas
@@ -1099,7 +1126,7 @@ for ly, dirn, k, vehs in LANES:
     gaps = CSPAN / len(vehs)
     phase = lane_phase(vehs, v) if dirn > 0 else 0.0
     for j, (kind, ln) in enumerate(vehs):
-        col = {"bus": (204, 186, 96), "taxi": (214, 170, 40)}.get(kind) or random.choice(VEH_COLS)
+        col = {"bus": (234, 236, 232), "taxi": (214, 170, 40)}.get(kind) or random.choice(VEH_COLS)   # el bus usa la librea MTA
         im = vehicle_side(ln, col, kind)
         if dirn > 0:
             im = im.transpose(Image.FLIP_LEFT_RIGHT)
