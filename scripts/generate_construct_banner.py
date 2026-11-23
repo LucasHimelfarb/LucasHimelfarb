@@ -214,42 +214,88 @@ haze = np.clip((yy - 20) / 70, 0, 1)[..., None]
 far_rgb = far_rgb * (1 - haze * .35) + np.array([200, 212, 190]) * haze * .35
 body.append(image(Image.fromarray(np.dstack([posterize(far_rgb, 24, 8), np.full((H, W), 255)]).astype(np.uint8), "RGBA"), up=1))
 
+def facade(u, v, hb, base, aw, det, bid, kind="shop", corner_edge=False):
+    """Fachada de piedra clara (tipo monumentos de Washington DC), común a toda la ciudad.
+
+    u: posición horizontal sobre la cara, v: altura sobre el piso, hb: altura del edificio.
+    Planta baja: comercio (vidriera, puerta, toldo opcional) u hall de entrada (columnas,
+    cornisa, puerta iluminada) sobre un basamento de bloques. Arriba: pisos cada 10,
+    columnas de ventanas cada 9, una moldura cada 4 pisos y cornisa en el techo.
+    """
+    det = np.asarray(det, float)
+    det = det if det.ndim == 3 else np.broadcast_to(det, u.shape)[..., None]
+    c = np.broadcast_to(base, u.shape + (3,)).copy()
+    d = hb - v                                          # distancia al techo
+    fl = np.floor((d - 6) / 10)
+    r, col = (d - 6) % 10, u % 9
+    upper = v > 31
+    win = (d >= 6) & (r < 6) & upper & (col >= 2) & (col < 7)
+    lit = ((fl * 7 + np.floor(u / 9) * 13 + hash(bid) % 11) % 19) == 0
+    glass = np.where(lit[..., None], [196, 206, 170], [52, 62, 60])
+    c = np.where(win[..., None], c * (1 - det) + glass * det, c)
+    c = np.where((win & (r < 1))[..., None], c * (1 - det) + (base * .62) * det, c)                  # dintel en sombra
+    sill = (d >= 6) & (r >= 6) & (r < 7) & upper & (col >= 1) & (col < 8)
+    c = np.where(sill[..., None], c + 16 * det, c)
+    course = (d >= 6) & ((fl % 4) == 3) & (r >= 7.5) & upper
+    c = np.where(course[..., None], c - 18 * det, c)                                                # moldura
+    pil = upper & (col < .9)
+    c = np.where(pil[..., None], c + 8 * det, c)
+    base_z = v < 31                                     # basamento de bloques
+    blocks = base_z & (((v % 4) < .8) | ((((u + (np.floor(v / 4) % 2) * 6) % 12) < .7) & (v > 26)))
+    c = np.where(blocks[..., None], c - 16 * det, c)
+    e = u % 40                                          # una entrada cada 40
+    if kind == "lobby":                                 # hall de entrada clásico
+        door = (e > 14) & (e < 26) & (v < 20)
+        lc = np.where(((e > 15.5) & (e < 24.5) & (v < 18.5))[..., None], [214, 196, 140], [40, 44, 42])
+        lc = np.where((((e > 19.6) & (e < 20.4)) & (v < 18.5))[..., None], [90, 80, 60], lc)
+        c = np.where(door[..., None], c * (1 - det) + lc * det, c)
+        colm = (((e > 10) & (e < 12.6)) | ((e > 27.4) & (e < 30))) & (v < 24)
+        c = np.where(colm[..., None], c + 22 * det, c)
+        c = np.where((colm & (((e > 11.8) & (e < 12.6)) | ((e > 29.2) & (e < 30))))[..., None], c - 30 * det, c)
+        ent = (e > 9) & (e < 31) & (v >= 24) & (v < 28)
+        c = np.where(ent[..., None], c + 26 * det, c)
+        c = np.where((ent & (v < 25))[..., None], c - 40 * det, c)
+        step = (e > 9) & (e < 31) & (v < 1.6)
+        c = np.where(step[..., None], c + 20 * det, c)
+    else:                                               # comercio
+        shop = (v > 1.5) & (v < 21) & (e > 3) & (e < 37)
+        sc = np.where(((v > 3) & (v < 19.5) & (e > 5) & (e < 35))[..., None], [70, 92, 84], [44, 52, 50])
+        sc = np.where(((v > 18.5) & (v < 19.5) & (e > 5) & (e < 35))[..., None], [176, 198, 180], sc)
+        sc = np.where(((e > 16) & (e < 24) & (v < 17))[..., None], [34, 42, 38], sc)
+        c = np.where(shop[..., None], c * (1 - det) + sc * det, c)
+        if aw is not None:
+            band = (v >= 21) & (v < 25) & (e > 2) & (e < 38)
+            c = np.where(band[..., None], c * (1 - det) + (aw + ((np.floor(v) % 2) * 18)[..., None]) * det, c)
+    c = np.where((d < 2)[..., None], c + 20, c)         # cornisa
+    if corner_edge:
+        c = np.where((u < 1.2)[..., None], c + 14, c)   # arista de la esquina
+    return np.clip(c, 0, 255)
+
+
 # fachada cercana + vereda: un tile de 320 px que se repite y se desplaza
 near = np.zeros((H, W, 4))
 AVE_TOP = 74                                                          # base de los edificios (vereda de enfrente)
 x = 0
-FACADE_TOP = 18
-FRONT_PAL = [(92, 104, 88), (104, 112, 94), (80, 92, 82), (112, 120, 106), (70, 80, 74)]
-blds = []                                                             # (x, ancho, techo, color, toldo)
+# piedra caliza clara, como los monumentos de Washington DC
+FRONT_PAL = [(206, 204, 196), (196, 196, 190), (216, 213, 204), (188, 190, 184), (224, 221, 212), (200, 198, 188)]
+AWN = [(52, 104, 74), (128, 120, 92), (70, 80, 76), (120, 60, 56)]
+blds = []                                                             # (x, ancho, techo, color, toldo, tipo)
+fi = 0
 while x < W:
-    aw = None
     bw = random.randint(46, 78)
     bw = min(bw, W - x) if W - x < 40 else bw
     c = np.array(random.choice(FRONT_PAL), float)
-    top = FACADE_TOP + random.randint(0, 14)
-    near[top:AVE_TOP, x:x + bw, :3] = c
-    near[top:AVE_TOP, x:x + bw, 3] = 255
-    near[top:top + 2, x:x + bw, :3] = c + 26                         # cornisa
-    near[top:AVE_TOP, x:x + 1, :3] = c + 14
-    near[top:AVE_TOP, x + bw - 1:x + bw, :3] = c - 20
-    for wy in range(top + 6, AVE_TOP - 26, 10):                          # ventanas
-        for wx in range(x + 5, x + bw - 7, 9):
-            near[wy:wy + 6, wx:wx + 5, :3] = (48, 62, 56)
-            near[wy:wy + 1, wx:wx + 5, :3] = (150, 170, 150)
-            near[wy + 6, wx - 1:wx + 6, :3] = c + 20
-    # planta baja: vidriera + puerta + toldo
-    sy = AVE_TOP - 22
-    near[sy:AVE_TOP, x + 3:x + bw - 3, :3] = (34, 46, 42)
-    near[sy + 2:AVE_TOP - 2, x + 5:x + bw - 5, :3] = (64, 86, 76)
-    near[sy + 2:sy + 3, x + 5:x + bw - 5, :3] = (170, 196, 170)
-    dx = x + bw // 2 - 4
-    near[sy + 4:AVE_TOP, dx:dx + 8, :3] = (28, 36, 32)
-    if random.random() < .6:
-        aw = np.array(random.choice([(40, 96, 62), (120, 128, 96), (60, 70, 66)]), float)
-        for i in range(4):
-            near[sy - 4 + i, x + 2 - i // 2:x + bw - 2 + i // 2, :3] = aw + (i % 2) * 18
-            near[sy - 4 + i, x + 2 - i // 2:x + bw - 2 + i // 2, 3] = 255
-    blds.append((x, bw, top, c.copy(), aw))
+    top = -random.randint(30, 110)                                    # muy altos: el techo queda fuera de cuadro
+    kind = "lobby" if random.random() < .45 else "shop"
+    aw = np.array(random.choice(AWN), float) if kind == "shop" and random.random() < .7 else None
+    yy_, xx_ = np.mgrid[0:AVE_TOP, x:min(W, x + bw)].astype(float)
+    face = facade(xx_ - x + .5 - (bw % 40) / 2, AVE_TOP - yy_ - .5, AVE_TOP - top, c, aw, 1.0, ("f", fi), kind)
+    near[0:AVE_TOP, x:x + bw, :3] = face
+    near[0:AVE_TOP, x:x + bw, 3] = 255
+    near[0:AVE_TOP, x:x + 1, :3] = np.clip(c + 14, 0, 255)            # juntas entre edificios
+    near[0:AVE_TOP, min(W, x + bw) - 1, :3] = c * .78
+    blds.append((x, bw, top, c.copy(), aw, kind))
+    fi += 1
     x += bw
 # avenida entre la vereda de enfrente y la nuestra, con bocacalle en la esquina
 GX, GW, VY = 168, 92, 60                                              # hueco de la bocacalle
@@ -284,39 +330,6 @@ HC = (AVE_TOP - VPY) * Z0 / F                         # altura de la cámara: el
 WR = WC * .72                                         # semiancho de la calzada
 
 
-def facade(u, v, hb, base, aw, det, bid, corner_edge=False):
-    """Textura de fachada igual a la de los edificios de frente de la avenida.
-
-    u: posición horizontal sobre la cara, v: altura sobre el piso, hb: altura del edificio.
-    Pisos cada 10 (ventanas de 6 con dintel claro y alféizar), columnas cada 9, planta baja
-    de 22 con vidriera y puerta, toldo opcional, cornisa arriba.
-    """
-    det = np.asarray(det, float)
-    det = det if det.ndim == 3 else np.broadcast_to(det, u.shape)[..., None]
-    c = np.broadcast_to(base, u.shape + (3,)).copy()
-    d = hb - v                                          # distancia al techo
-    r, col = (d - 6) % 10, u % 9
-    win = (d >= 6) & (r < 6) & (v > 27) & (col >= 2) & (col < 7)
-    lit = ((np.floor((d - 6) / 10) * 7 + np.floor(u / 9) * 13 + hash(bid) % 11) % 19) == 0
-    glass = np.where(lit[..., None], [180, 200, 164], [48, 62, 56])
-    c = np.where(win[..., None], c * (1 - det) + glass * det, c)
-    c = np.where((win & (r < 1))[..., None], c * (1 - det) + np.array([150, 170, 150]) * det, c)     # dintel
-    sill = (d >= 6) & (r >= 6) & (r < 7) & (v > 27) & (col >= 1) & (col < 8)
-    c = np.where(sill[..., None], c + 20 * det, c)
-    shop = v < 22                                       # planta baja: vidriera + puerta
-    sc = np.where(((v > 2) & (v < 20) & ((u % 40) > 4) & ((u % 40) < 36))[..., None], [64, 86, 76], [34, 46, 42])
-    sc = np.where(((v > 19) & (v < 20.2))[..., None], [170, 196, 170], sc)
-    sc = np.where((((u % 40) > 16) & ((u % 40) < 24) & (v < 18))[..., None], [28, 36, 32], sc)
-    c = np.where(shop[..., None], c * (1 - det) + sc * det, c)
-    if aw is not None:                                  # toldo
-        band = (v >= 22) & (v < 26)
-        c = np.where(band[..., None], c * (1 - det) + (aw + ((np.floor(v) % 2) * 18)[..., None]) * det, c)
-    c = np.where((d < 2)[..., None], c + 26, c)         # cornisa
-    if corner_edge:
-        c = np.where((u < 1.2)[..., None], c + 16, c)   # arista de la esquina
-    return c
-
-
 def street_corridor():
     """Calle transversal en perspectiva de un punto, con edificios como volúmenes.
 
@@ -333,16 +346,17 @@ def street_corridor():
         while z < 3600:
             ln = rnd.uniform(70, 200)
             if z == Z0:                                   # el mismo edificio de la avenida dobla la esquina
-                _, _, top, col, aw = corner[side]
+                _, _, top, col, aw, kind = corner[side]
                 setback, hb, ln = 0, AVE_TOP - top, rnd.uniform(110, 170)
             else:
                 setback = rnd.choice([0, 0, 2, 5, 9])
-                hb = rnd.choice([rnd.uniform(18, 26), rnd.uniform(46, 62), rnd.uniform(56, 90), rnd.uniform(80, 140)])
-                col = np.array(rnd.choice(FRONT_PAL), float) * rnd.uniform(.95, 1.08)
-                aw = np.array(rnd.choice([(40, 96, 62), (120, 128, 96), (60, 70, 66)]), float) if rnd.random() < .5 else None
-            boxes.append((side, WC + setback, z, z + ln, hb, col, (side, bid), aw))
+                hb = rnd.choice([rnd.uniform(70, 110), rnd.uniform(90, 150), rnd.uniform(120, 200)])
+                col = np.array(rnd.choice(FRONT_PAL), float) * rnd.uniform(.94, 1.03)
+                kind = "lobby" if rnd.random() < .45 else "shop"
+                aw = np.array(rnd.choice(AWN), float) if kind == "shop" and rnd.random() < .6 else None
+            boxes.append((side, WC + setback, z, z + ln, hb, col, (side, bid), aw, kind))
             if hb > HC + 20 and rnd.random() < .45:     # piso superior retirado
-                boxes.append((side, WC + setback + 7, z + 10, z + ln - 10, hb + rnd.uniform(10, 26), col * .94, (side, bid, 1), None))
+                boxes.append((side, WC + setback + 7, z + 10, z + ln - 10, hb + rnd.uniform(10, 26), col * .94, (side, bid, 1), None, kind))
             bid += 1
             z += ln + (rnd.uniform(30, 70) if rnd.random() < .12 else 0)   # a veces, otra bocacalle
 
@@ -372,7 +386,7 @@ def street_corridor():
         g[(X <= WR) & (X > WR - 1.5)] -= 10                   # sombra del cordón
         put(np.isfinite(zg), zg, g)
 
-        for side, x0, z0, z1, hb, col, bid, aw in boxes:
+        for side, x0, z0, z1, hb, col, bid, aw, kind in boxes:
             on = sgn == side
             light = 1.08 if side < 0 else .74                 # una vereda al sol, la otra a la sombra
             # fachada a la calle (plano X = x0)
@@ -382,7 +396,7 @@ def street_corridor():
             if mf.any():
                 u, v = zf - z0, hf
                 det = np.exp(-(zf - Z0) / 900)[..., None]     # el detalle se esfuma con la distancia
-                c = facade(u, v, hb, col * light, aw, det, bid, corner_edge=(z0 == Z0))
+                c = facade(u, v, hb, col * light, aw, det, bid, kind, corner_edge=(z0 == Z0))
                 put(mf, zf, c)
             # cara de frente (plano z = z0, mira a la cámara)
             xf = adx * z0 / F
@@ -391,7 +405,7 @@ def street_corridor():
             if mz.any():
                 u, v = xf - x0, hz
                 det = np.exp(-(z0 - Z0) / 900)
-                c = facade(u, v, hb, col * (.9 if side < 0 else .84), aw, det, bid, corner_edge=True)
+                c = facade(u, v, hb, col * (.9 if side < 0 else .84), aw, det, bid, kind, corner_edge=True)
                 put(mz, np.full(px.shape, z0, float), c)
             # techo (visible solo en edificios más bajos que la cámara)
             if hb < HC:
