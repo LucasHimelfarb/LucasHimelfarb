@@ -16,6 +16,7 @@ cinemascope, viñeta).
 import base64
 import io
 import random
+import zlib
 from pathlib import Path
 
 import numpy as np
@@ -219,59 +220,125 @@ haze = np.clip((yy - 20) / 70, 0, 1)[..., None]
 far_rgb = far_rgb * (1 - haze * .35) + np.array([200, 212, 190]) * haze * .35
 body.append(image(Image.fromarray(np.dstack([posterize(far_rgb, 24, 8), np.full((H, W), 255)]).astype(np.uint8), "RGBA"), up=1))
 
+def stable_hash(x):
+    """Hash estable entre ejecuciones (hash() de Python cambia en cada corrida con strings)."""
+    return zlib.crc32(repr(x).encode())
+
+
+# Escala de fachada a la distancia de la vereda de enfrente (una persona ~20 px = 1.75 m):
+G_FLOOR, FLOOR_H, BAY = 32.0, 26.0, 18.0              # planta baja, piso y ancho de vano
+BRICKS = [(150, 84, 66), (128, 74, 60), (110, 70, 58), (176, 150, 116), (164, 132, 100)]
+CANOPY = [(40, 70, 52), (110, 36, 40), (30, 40, 70), (24, 26, 28)]
+
+
 def facade(u, v, hb, base, aw, det, bid, kind="shop", corner_edge=False):
-    """Fachada de piedra clara (tipo monumentos de Washington DC), común a toda la ciudad.
+    """Fachada de un barrio de Nueva York de los 2000, a escala real, común a toda la ciudad.
 
     u: posición horizontal sobre la cara, v: altura sobre el piso, hb: altura del edificio.
-    Planta baja: comercio (vidriera, puerta, toldo opcional) u hall de entrada (columnas,
-    cornisa, puerta iluminada) sobre un basamento de bloques. Arriba: pisos cada 10,
-    columnas de ventanas cada 9, una moldura cada 4 pisos y cornisa en el techo.
+    Cada edificio (bid) elige material y detalles con un hash estable: piedra caliza clara (la mayoría),
+    ladrillo rojo/marrón u ocre con hiladas, o hierro fundido estilo SoHo. Planta baja de comercio
+    (cartel sin letras, vidriera, puerta, toldo) o de hall (marquesina, puerta iluminada, número).
+    Pisos con ventanas de guillotina, dinteles, alféizares, cortinas, aires acondicionados de ventana,
+    molduras, escaleras de incendio en los de ladrillo y cornisa con dentículos.
     """
+    hsh = stable_hash(bid)
+    mat = ["stone", "stone", "stone", "brick", "brick", "tan", "iron"][hsh % 7]
     det = np.asarray(det, float)
     det = det if det.ndim == 3 else np.broadcast_to(det, u.shape)[..., None]
+    if mat == "brick":
+        base = np.array(BRICKS[hsh % 3], float) * (np.asarray(base, float).mean() / 200)
+    elif mat == "tan":
+        base = np.array(BRICKS[3 + hsh % 2], float) * (np.asarray(base, float).mean() / 200)
+    elif mat == "iron":
+        base = np.array([214, 208, 192], float) * (np.asarray(base, float).mean() / 200)
+    base = np.asarray(base, float)
     c = np.broadcast_to(base, u.shape + (3,)).copy()
-    d = hb - v                                          # distancia al techo
-    fl = np.floor((d - 6) / 10)
-    r, col = (d - 6) % 10, u % 9
-    upper = v > 31
-    win = (d >= 6) & (r < 6) & upper & (col >= 2) & (col < 7)
-    lit = ((fl * 7 + np.floor(u / 9) * 13 + hash(bid) % 11) % 19) == 0
-    glass = np.where(lit[..., None], [196, 206, 170], [52, 62, 60])
+    trim = np.array([212, 208, 198]) * (base.mean() / 190) if mat in ("brick", "tan") else base * 1.1
+    up = v >= G_FLOOR
+    d = hb - v
+    rr = (v - G_FLOOR) % FLOOR_H                               # altura dentro del piso
+    fl = np.floor((v - G_FLOOR) / FLOOR_H)
+    bx = u % BAY
+    bay = np.floor(u / BAY)
+    # material
+    if mat in ("brick", "tan"):
+        course = (v % 2.6) < .55
+        joint = ((u + (np.floor(v / 2.6) % 2) * 3) % 6) < .5
+        c = np.where(((course | joint) & up)[..., None], c * (1 - det * .25) + det * .25 * 205, c)
+        c = c + (((np.floor(u / 6) * 7 + np.floor(v / 2.6) * 3) % 5)[..., None] - 2) * 2.5 * det   # ladrillos desparejos
+    elif mat == "iron":
+        col_ = up & (bx < 2.4)                                # columnas de hierro entre ventanales
+        c = np.where(col_[..., None], c * .9, c)
+    c = np.where((up & (rr < 1.2))[..., None], c * (1 - det) + trim * .94 * det, c)                 # moldura de piso
+    # ventanas
+    w0, w1 = (3.0, 15.0) if mat == "iron" else (4.5, 13.5)
+    h0, h1 = 6.0, (22.0 if mat == "iron" else 20.0)
+    win = up & (bx >= w0) & (bx < w1) & (rr >= h0) & (rr < h1) & (d > 10)
+    wid = (fl * 31 + bay * 17 + hsh) % 23
+    glass = np.zeros(u.shape + (3,)) + (44, 54, 60)
+    glass = glass + ((rr - h0) / (h1 - h0))[..., None] * -10 + ((bx - w0) < 2)[..., None] * 14   # reflejo
+    curtain = (wid % 5 == 1) & (rr > (h0 + h1) / 2)
+    glass = np.where(curtain[..., None], [196, 186, 164], glass)
+    blinds = (wid % 7 == 3) & ((rr % 1.5) < .6)
+    glass = np.where(blinds[..., None], [176, 176, 170], glass)
+    lit = wid == 11
+    glass = np.where(lit[..., None], [206, 196, 150], glass)
+    sash = (np.abs(rr - (h0 + h1) / 2) < .55) | ((bx - w0) < .6) | ((w1 - bx) < .6)            # marco de guillotina
+    glass = np.where(sash[..., None], [222, 222, 214], glass)
     c = np.where(win[..., None], c * (1 - det) + glass * det, c)
-    c = np.where((win & (r < 1))[..., None], c * (1 - det) + (base * .62) * det, c)                  # dintel en sombra
-    sill = (d >= 6) & (r >= 6) & (r < 7) & upper & (col >= 1) & (col < 8)
-    c = np.where(sill[..., None], c + 16 * det, c)
-    course = (d >= 6) & ((fl % 4) == 3) & (r >= 7.5) & upper
-    c = np.where(course[..., None], c - 18 * det, c)                                                # moldura
-    pil = upper & (col < .9)
-    c = np.where(pil[..., None], c + 8 * det, c)
-    base_z = v < 31                                     # basamento de bloques
-    blocks = base_z & (((v % 4) < .8) | ((((u + (np.floor(v / 4) % 2) * 6) % 12) < .7) & (v > 26)))
-    c = np.where(blocks[..., None], c - 16 * det, c)
-    e = u % 40                                          # una entrada cada 40
-    if kind == "lobby":                                 # hall de entrada clásico
-        door = (e > 14) & (e < 26) & (v < 20)
-        lc = np.where(((e > 15.5) & (e < 24.5) & (v < 18.5))[..., None], [214, 196, 140], [40, 44, 42])
-        lc = np.where((((e > 19.6) & (e < 20.4)) & (v < 18.5))[..., None], [90, 80, 60], lc)
-        c = np.where(door[..., None], c * (1 - det) + lc * det, c)
-        colm = (((e > 10) & (e < 12.6)) | ((e > 27.4) & (e < 30))) & (v < 24)
-        c = np.where(colm[..., None], c + 22 * det, c)
-        c = np.where((colm & (((e > 11.8) & (e < 12.6)) | ((e > 29.2) & (e < 30))))[..., None], c - 30 * det, c)
-        ent = (e > 9) & (e < 31) & (v >= 24) & (v < 28)
-        c = np.where(ent[..., None], c + 26 * det, c)
-        c = np.where((ent & (v < 25))[..., None], c - 40 * det, c)
-        step = (e > 9) & (e < 31) & (v < 1.6)
-        c = np.where(step[..., None], c + 20 * det, c)
-    else:                                               # comercio
-        shop = (v > 1.5) & (v < 21) & (e > 3) & (e < 37)
-        sc = np.where(((v > 3) & (v < 19.5) & (e > 5) & (e < 35))[..., None], [70, 92, 84], [44, 52, 50])
-        sc = np.where(((v > 18.5) & (v < 19.5) & (e > 5) & (e < 35))[..., None], [176, 198, 180], sc)
-        sc = np.where(((e > 16) & (e < 24) & (v < 17))[..., None], [34, 42, 38], sc)
-        c = np.where(shop[..., None], c * (1 - det) + sc * det, c)
+    lint = up & (bx >= w0 - 1) & (bx < w1 + 1) & (rr >= h1) & (rr < h1 + 2.2) & (d > 10)
+    sill = up & (bx >= w0 - 1.2) & (bx < w1 + 1.2) & (rr >= h0 - 1.6) & (rr < h0) & (d > 10)
+    c = np.where((lint | sill)[..., None], c * (1 - det) + trim * det, c)
+    ac = win & (wid % 6 == 2) & (bx >= w0 + 1.5) & (bx < w1 - 1.5) & (rr < h0 + 4)                 # aire acondicionado
+    c = np.where(ac[..., None], c * (1 - det) + np.array([150, 152, 150]) * det, c)
+    c = np.where((ac & ((bx % 1.2) < .4))[..., None], c - 26 * det, c)
+    # escaleras de incendio (ladrillo), dos vanos por edificio y por cada 4 vanos en las caras largas
+    if mat in ("brick", "tan"):
+        fe_b = np.floor(u / (BAY * 4)) * BAY * 4 + BAY
+        t_ = u - fe_b
+        in_fe = up & (t_ >= 0) & (t_ < 2 * BAY) & (d > 14) & (v > G_FLOOR + 4)
+        plat = in_fe & (rr >= 3) & (rr < 4.4)
+        rail = in_fe & (((rr >= 11) & (rr < 11.8)) | (((t_ % 2.2) < .5) & (rr >= 4.4) & (rr < 11)))
+        lad = in_fe & (np.abs((rr - 4) - (t_ - 4) * (FLOOR_H / 24)) < .9) & (t_ > 4) & (t_ < 28)
+        fe = plat | rail | lad
+        c = np.where(fe[..., None], c * (1 - det * .9) + np.array([28, 30, 32]) * det * .9, c)
+    # planta baja
+    gf = v < G_FLOOR
+    e = u % 40
+    if kind == "lobby":
+        ston = np.array([206, 202, 192]) * (base.mean() / 190 if mat == "stone" else 1)
+        c = np.where(gf[..., None], c * (1 - det) + ston * det, c)
+        c = np.where((gf & ((v % 4) < .7))[..., None], c - 14 * det, c)                             # sillares
+        door = gf & (e > 13) & (e < 27) & (v < 19)
+        dc = np.where(((e > 14) & (e < 26) & (v < 18))[..., None], [214, 196, 140], [36, 40, 38])
+        dc = np.where(((np.abs(e - 20) < .5) & (v < 18))[..., None], [90, 80, 60], dc)
+        c = np.where(door[..., None], c * (1 - det) + dc * det, c)
+        tran = gf & (e > 14) & (e < 26) & (v >= 19.5) & (v < 23)                                     # banderola
+        c = np.where(tran[..., None], c * (1 - det) + np.array([196, 186, 140]) * det, c)
+        can = gf & (e > 9) & (e < 31) & (v >= 24) & (v < 27.5)                                       # marquesina
+        c = np.where(can[..., None], c * (1 - det) + np.array(CANOPY[hsh % 4]) * det, c)
+        num = gf & (e > 30) & (e < 33) & (v > 12) & (v < 15)                                         # número
+        c = np.where(num[..., None], c * (1 - det) + np.array([226, 210, 150]) * det, c)
+    else:
+        sign = gf & (v >= 24) & (v < 31)                                                             # marquesina de cartel
+        sc = np.array(CANOPY[(hsh // 3) % 4]) + 10
+        c = np.where(sign[..., None], c * (1 - det) + sc * det, c)
+        glyph = sign & (v >= 26) & (v < 29) & (e > 6) & (e < 34) & (((e * 1.7 + hsh) % 3.4) < 1.6)   # (sin letras legibles)
+        c = np.where(glyph[..., None], c * (1 - det) + np.array([226, 220, 196]) * det, c)
+        frame = gf & (v < 24)
+        fc = np.where(((v > 2) & (v < 22.5) & (e > 2) & (e < 38))[..., None], [64, 86, 80], [40, 46, 44])
+        fc = np.where(((v > 2) & (v < 22.5) & ((e % 9) < .7) & (e > 2) & (e < 38))[..., None], [40, 46, 44], fc)
+        fc = np.where(((e > 16) & (e < 24) & (v < 20))[..., None], [30, 36, 34], fc)                # puerta
+        fc = np.where(((v > 12) & (v < 21) & (e > 4) & (e < 15) & ((u * 3 + v) % 7 < 1.2))[..., None], [190, 196, 180], fc)  # reflejo
+        c = np.where(frame[..., None], c * (1 - det) + fc * det, c)
         if aw is not None:
-            band = (v >= 21) & (v < 25) & (e > 2) & (e < 38)
-            c = np.where(band[..., None], c * (1 - det) + (aw + ((np.floor(v) % 2) * 18)[..., None]) * det, c)
-    c = np.where((d < 2)[..., None], c + 20, c)         # cornisa
+            band = gf & (v >= 18) & (v < 24) & (e > 1) & (e < 39)
+            stripe = (np.floor(u / 3) % 2)[..., None]
+            c = np.where(band[..., None], c * (1 - det) + (np.asarray(aw) * (.85 + .3 * stripe)) * det, c)
+    # cornisa con dentículos
+    cor = (d < 5) & (d >= 0)
+    c = np.where(cor[..., None], c * (1 - det) + trim * 1.08 * det, c)
+    c = np.where((cor & (d > 1.5) & (d < 2.8) & ((u % 2.4) < 1.1))[..., None], c - 30 * det, c)
     if corner_edge:
         c = np.where((u < 1.2)[..., None], c + 14, c)   # arista de la esquina
     return np.clip(c, 0, 255)
@@ -521,14 +588,15 @@ def street_corridor():
             ln = rnd.uniform(70, 200)
             if z == Z0:                                   # el mismo edificio de la avenida dobla la esquina
                 _, _, top, col, aw, kind = corner[side]
+                corner_bid = ("f", next(i_ for i_, b_ in enumerate(blds) if b_ is corner[side]))
                 setback, hb, ln = 0, AVE_TOP - top, rnd.uniform(110, 170)
             else:
                 setback = rnd.choice([0, 0, 2, 5, 9])
-                hb = rnd.choice([rnd.uniform(70, 110), rnd.uniform(90, 150), rnd.uniform(120, 200)])
+                hb = rnd.choice([rnd.uniform(110, 180), rnd.uniform(160, 260), rnd.uniform(220, 420)])   # escala de NY
                 col = np.array(rnd.choice(FRONT_PAL), float) * rnd.uniform(.94, 1.03)
                 kind = "lobby" if rnd.random() < .45 else "shop"
                 aw = np.array(rnd.choice(AWN), float) if kind == "shop" and rnd.random() < .6 else None
-            boxes.append((side, WC + setback, z, z + ln, hb, col, (side, bid), aw, kind))
+            boxes.append((side, WC + setback, z, z + ln, hb, col, corner_bid if z == Z0 else (side, bid), aw, kind))
             if hb > HC + 20 and rnd.random() < .45:     # piso superior retirado
                 boxes.append((side, WC + setback + 7, z + 10, z + ln - 10, hb + rnd.uniform(10, 26), col * .94, (side, bid, 1), None, kind))
             bid += 1
