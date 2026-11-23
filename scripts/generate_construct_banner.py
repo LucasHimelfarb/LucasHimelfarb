@@ -435,9 +435,6 @@ cd.rectangle([0, AVE_TOP + 4, W, GROUND - 1], fill=(64, 70, 68, 255))     # calz
 for lx in range(0, W, 12):                                                # línea divisoria
     cd.line([(lx, AVE_TOP + 11), (lx + 6, AVE_TOP + 11)], fill=(210, 204, 150, 255))
 cd.line([(0, GROUND - 1), (W, GROUND - 1)], fill=(44, 50, 48, 255))
-# senda peatonal también sobre la avenida, frente a la bocacalle
-for lx in range(GX + 6, GX + GW - 6, 5):
-    cd.rectangle([lx, AVE_TOP + 5, lx + 2, GROUND - 3], fill=(206, 208, 196, 255))
 # semáforo en la esquina
 sx_ = GX + GW + 2
 cd.rectangle([sx_, 40, sx_ + 1, GROUND], fill=(30, 36, 32, 255))
@@ -510,8 +507,10 @@ def street_corridor():
         g = np.zeros(px.shape + (3,)) + (64, 70, 68)
         g[X > WR] = (190, 196, 180)
         g[X > WR + 1.2] = (150, 158, 140)
-        dash = (X < 1.4) & ((zg % 50) < 24)
+        dash = (X < 1.4) & ((zg % 50) < 24) & (zg > Z0 + 8)
         g[dash] = (210, 204, 150)
+        far_xw = (zg >= 86) & (zg < Z0 - .5) & (X < WR - 1.5) & (((X + WR) % 7) < 3.6)   # senda de enfrente
+        g[far_xw] = (226, 228, 214)
         g[(X <= WR) & (X > WR - 1.5)] -= 10                   # sombra del cordón
         put(np.isfinite(zg), zg, g)
 
@@ -688,24 +687,32 @@ ha = np.asarray(hyd, dtype=float); hm = ha[..., 3] > 0
 ys_h, xs_h = np.nonzero(hm)
 near[HB - 14 + ys_h, HX + xs_h, :3] = ha[ys_h, xs_h, :3]
 
-# bocacalle de nuestro lado: calzada que se abre hacia la cámara, con senda de rayas verticales
-# (en el sentido de la calle que cruzamos), en perspectiva hacia el punto de fuga de la calle del fondo
-VPY_S = 46.0
-for y_ in range(GROUND, H):
-    f_ = (y_ + .5 - VPY_S) / (GROUND - VPY_S)
-    half = (GW / 2 + 2) * f_
-    xa_, xb_ = GC - half, GC + half
-    xs_all = np.arange(W) + .5
-    road = (xs_all >= xa_) & (xs_all <= xb_)
-    near[y_, road, :3] = (70, 76, 74)
-    if y_ >= GROUND + 2:
-        Xn = (xs_all - GC) / f_                                          # posición "real" en la calle
-        stripe = road & (np.abs(Xn) < GW / 2 - 3) & (((Xn + GW / 2) % 7) < 3.6)
-        near[y_, stripe, :3] = (226, 228, 214)
-    for xe in (xa_ - 1, xb_ + 1):                                        # cordones en perspectiva
-        xi = int(round(xe))
-        if 0 <= xi < W:
-            near[y_, xi, :3] = (200, 202, 196)
+# Intersección con una sola perspectiva: la de la calle del fondo. Cada punto del piso se ubica en
+# coordenadas reales de esa calle (X a lo ancho, z en profundidad) y se proyecta igual que allá:
+#   x = GC + X * (y - VPY) / HC,   z = F * HC / (y - VPY)
+#  - la calzada de la calle del fondo sigue cruzando la avenida y nuestra vereda (|X| <= WR);
+#  - sendas para cruzarla en la vereda de enfrente y en la nuestra: rayas a lo largo de la calle;
+#  - sendas para cruzar la avenida a cada lado de la bocacalle (WR < |X| < WC): rayas a lo largo
+#    de la avenida, apiladas en profundidad; la línea divisoria se corta en el cruce.
+xs_all = np.arange(W) + .5
+for y_ in range(AVE_TOP + 4, H):
+    f_ = (y_ + .5 - VPY) / HC
+    Xr = (xs_all - GC) / f_                              # posición real a lo ancho de la calle del fondo
+    aX = np.abs(Xr)
+    z_ = F * HC / (y_ + .5 - VPY)
+    road = aX <= WR
+    if y_ < GROUND:                                      # sobre la avenida
+        if y_ == AVE_TOP + 11:
+            near[y_, aX < WC + 2, :3] = (64, 70, 68)     # la línea divisoria se corta en el cruce
+        cross = (aX > WR + 1) & (aX < WC - 1) & ((z_ % 6) < 2.6) & (y_ > AVE_TOP + 5) & (y_ < GROUND - 1)
+        near[y_, cross, :3] = (220, 222, 210)
+    else:                                                # nuestra vereda
+        near[y_, road, :3] = (70, 76, 74)
+        if y_ >= GROUND + 2:
+            stripe = (aX < WR - 1.5) & (((Xr + WR) % 7) < 3.6)
+            near[y_, stripe, :3] = (226, 228, 214)
+        curb = (aX > WR) & (aX <= WR + max(.8, 1.2 / f_))
+        near[y_, curb, :3] = (200, 202, 196)
 for _ in range(3):                                                      # postes / farolas
     px = random.choice([random.randrange(10, GX - 12), random.randrange(GX + GW + 8, W - 10)])
     near[30:GROUND + 2, px:px + 2, :3] = (40, 48, 44); near[30:GROUND + 2, px:px + 2, 3] = 255
