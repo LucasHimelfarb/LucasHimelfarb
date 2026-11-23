@@ -1000,34 +1000,50 @@ for px in (372, 468, 566):                                              # postes
 
 # ---------- vegetación
 def street_tree(height, seed, young=True):
-    """Árbol de vereda neoyorquino: tronco fino, ramas y copa de hojas en varios verdes (dibujado a 4x)."""
+    """Plátano de sombra de vereda neoyorquina: tronco grueso de corteza manchada, ramas altas y copa
+    ovalada, más alta que ancha y densa (dibujado a 4x)."""
     S4 = 4
     Hh = height * S4
-    w_ = int(height * .62) * S4
+    w_ = int(height * .5) * S4
     im = Image.new("RGBA", (w_, int(Hh) + S4), (0, 0, 0, 0)); d = ImageDraw.Draw(im)
     rt = random.Random(seed)
     cx_t, base = w_ / 2, Hh
-    trunk_top = base - Hh * .45
-    limb(d, (cx_t, base), (cx_t + rt.uniform(-.02, .02) * Hh, trunk_top), .07 * Hh, .045 * Hh, (74, 62, 52))
-    d.line([(cx_t - .015 * Hh, base), (cx_t - .012 * Hh, trunk_top)], fill=(110, 96, 82), width=max(1, int(.012 * Hh)))
-    for a_ in (-.7, -.25, .2, .65):                          # ramas
-        ex, ey = cx_t + np.sin(a_) * .25 * Hh, trunk_top - np.cos(a_) * .22 * Hh
-        limb(d, (cx_t, trunk_top + .03 * Hh), (ex, ey), .03 * Hh, .014 * Hh, (70, 58, 48))
-    greens = [(54, 92, 50), (70, 112, 58), (88, 132, 66), (112, 154, 80), (44, 76, 44)]
-    for _ in range(46 if young else 70):                     # racimos de hojas
+    trunk_top = base - Hh * .5
+    lean_ = rt.uniform(-.015, .015) * Hh
+    limb(d, (cx_t, base), (cx_t + lean_, trunk_top), .1 * Hh, .07 * Hh, (96, 88, 74))      # tronco grueso
+    d.polygon([(cx_t - .07 * Hh, base), (cx_t + .07 * Hh, base), (cx_t + .05 * Hh, base - .04 * Hh),
+               (cx_t - .05 * Hh, base - .04 * Hh)], fill=(88, 80, 66))                      # base que se ensancha
+    for _ in range(26):                                      # corteza manchada del plátano
+        t_ = rt.uniform(.05, 1)
+        yy_ = base - t_ * (base - trunk_top)
+        xx_ = cx_t + lean_ * t_ + rt.uniform(-.035, .035) * Hh
+        r_ = rt.uniform(.008, .018) * Hh
+        d.ellipse([xx_ - r_, yy_ - r_ * 1.4, xx_ + r_, yy_ + r_ * 1.4],
+                  fill=rt.choice([(176, 168, 140), (150, 146, 120), (70, 66, 56)]))
+    d.line([(cx_t + .035 * Hh, base), (cx_t + .03 * Hh + lean_, trunk_top)], fill=(60, 54, 46), width=max(1, int(.012 * Hh)))
+    for a_ in (-.55, -.2, .15, .5):                          # ramas altas
+        ex, ey = cx_t + lean_ + np.sin(a_) * .2 * Hh, trunk_top - np.cos(a_) * .2 * Hh
+        limb(d, (cx_t + lean_, trunk_top + .02 * Hh), (ex, ey), .045 * Hh, .02 * Hh, (88, 80, 68))
+    greens = [(40, 74, 42), (54, 92, 50), (70, 112, 58), (88, 132, 66), (110, 150, 78)]
+    ccx, ccy = cx_t + lean_, trunk_top - .2 * Hh               # copa ovalada (alta)
+    RX, RY = .22 * Hh, .3 * Hh
+    for _ in range(110):
         ang = rt.uniform(0, 2 * np.pi)
-        rr = rt.uniform(0, 1) ** .6
-        lx_ = cx_t + np.cos(ang) * rr * .3 * Hh
-        ly_ = trunk_top - .24 * Hh + np.sin(ang) * rr * .22 * Hh
-        r_ = rt.uniform(.035, .07) * Hh
-        g_ = greens[min(4, int((1 - (ly_ - (trunk_top - .46 * Hh)) / (.5 * Hh)) * 3.5 + rt.uniform(-1, 1)))] \
-            if rt.random() < .85 else greens[4]
-        d.ellipse([lx_ - r_, ly_ - r_ * .85, lx_ + r_, ly_ + r_ * .85], fill=g_)
-    for _ in range(14):                                      # luz en la parte de arriba de la copa
-        lx_ = cx_t + rt.uniform(-.22, .22) * Hh
-        ly_ = trunk_top - .36 * Hh + rt.uniform(-.08, .1) * Hh
-        r_ = rt.uniform(.02, .035) * Hh
-        d.ellipse([lx_ - r_, ly_ - r_, lx_ + r_, ly_ + r_], fill=(140, 180, 96))
+        rr = rt.uniform(0, 1) ** .55
+        lx_, ly_ = ccx + np.cos(ang) * rr * RX, ccy + np.sin(ang) * rr * RY
+        r_ = rt.uniform(.03, .055) * Hh
+        lvl = (ccy + RY - ly_) / (2 * RY)                    # 0 abajo .. 1 arriba: más luz arriba
+        g_ = greens[int(np.clip(lvl * 4 + rt.uniform(-1.2, .8), 0, 4))]
+        d.ellipse([lx_ - r_, ly_ - r_, lx_ + r_, ly_ + r_], fill=g_)
+    for _ in range(18):                                      # luz en el borde superior izquierdo
+        ang = rt.uniform(np.pi * 1.05, np.pi * 1.6)
+        lx_, ly_ = ccx + np.cos(ang) * RX * .8, ccy + np.sin(ang) * RY * .8
+        r_ = rt.uniform(.015, .028) * Hh
+        d.ellipse([lx_ - r_, ly_ - r_, lx_ + r_, ly_ + r_], fill=(146, 184, 100))
+    for _ in range(10):                                      # huecos de sombra dentro de la copa
+        lx_, ly_ = ccx + rt.uniform(-.6, .6) * RX, ccy + rt.uniform(-.2, .7) * RY
+        r_ = rt.uniform(.012, .022) * Hh
+        d.ellipse([lx_ - r_, ly_ - r_, lx_ + r_, ly_ + r_], fill=(30, 56, 34))
     return _finish(im, int(w_ / S4), int(im.height / S4))
 
 
@@ -1055,7 +1071,7 @@ def bake(im, x0, base_y):
     near[ty[ok], tx[ok], 3] = 255
 
 
-FAR_TREE_H = 40                                              # ~3.5 m a la distancia de la vereda de enfrente
+FAR_TREE_H = 56                                              # ~5 m a la distancia de la vereda de enfrente
 for i_, tx_ in enumerate((296, 430, 560)):                # lejos de la pantalla LED y de la esquina
     t_im = street_tree(FAR_TREE_H, 50 + i_)
     bake(t_im, tx_ - t_im.width / 2, AVE_TOP + 2)
@@ -1945,7 +1961,7 @@ dump_svg = "".join(f'<g transform="translate({off} 0)">{dump_svg}</g>' for off i
 body.append(f'<g style="{track(TILE0, NEAR_SPEED, TW, 0, 0)}">{dump_svg}</g>')
 
 # ============================================================ árboles de nuestra vereda (capa propia)
-OUR_TREE_H = 66                                              # ~3.5 m junto al cordón
+OUR_TREE_H = 92                                              # ~5 m junto al cordón (la copa sale del cuadro)
 trees_svg = ""
 for i_, tx_ in enumerate(OUR_TREES):
     t_im = street_tree(OUR_TREE_H, 90 + i_)
