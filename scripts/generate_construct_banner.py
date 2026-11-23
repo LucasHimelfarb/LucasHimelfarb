@@ -30,7 +30,8 @@ random.seed(SEED)
 rng = np.random.default_rng(SEED)
 
 T = 32.0                 # ciclo maestro (s)
-F0, F1 = 20.0, 28.0      # congelado
+SHIFT = 4.0              # todos los eventos se corren 4 s: el congelado cierra la vuelta
+F0, F1 = 24.0, 32.0      # congelado: los últimos 8 s; al terminar, todo empieza de nuevo (perfect loop)
 WALK = T - (F1 - F0)     # tiempo efectivo caminando
 TW = 2 * W               # ancho del tramo de fondo que se repite (una sola esquina: cuadra larga)
 NEAR_SPEED = TW / WALK   # px/s de la fachada cercana (cámara que sigue a los protagonistas, ~1 m/s)
@@ -1531,8 +1532,7 @@ def frozen_green(im):
 css.append("@keyframes fa{0%,49.9%{opacity:1}50%,100%{opacity:0}}@keyframes fb{0%,49.9%{opacity:0}50%,100%{opacity:1}}")
 WALK_VIS = window(0, T, "walkvis")  # se reemplaza abajo
 css.pop()
-css.append(f"@keyframes walkvis{{0%,{pct(F0) - .001:.3f}%{{opacity:1}}{pct(F0):.3f}%,{pct(F1) - .001:.3f}%{{opacity:0}}"
-           f"{pct(F1):.3f}%,100%{{opacity:1}}}}")
+css.append(f"@keyframes walkvis{{0%,{pct(F0) - .001:.3f}%{{opacity:1}}{pct(F0):.3f}%,100%{{opacity:0}}}}")
 WALK_VIS = f"animation:walkvis {T}s infinite linear"
 FRZ_VIS = window(F0, F1, "frzvis")
 
@@ -1645,7 +1645,7 @@ def tile_g(t):                                         # desplazamiento (sin mó
 
 
 TURN_COL = (196, 150, 40)                              # un taxi amarillo, para que se distinga
-T_IN, T_TURN, T_GONE = 15.0, 17.0, 19.8                 # con la esquina a la vista
+T_IN, T_TURN, T_GONE = 15.0 + SHIFT, 17.0 + SHIFT, 19.8 + SHIFT                 # con la esquina a la vista
 LANE_Y = NEAR_LANE                                     # carril cercano (va hacia la derecha)
 X_LANE = WR * .5                                       # carril de ida de la calle transversal
 z_a = F * HC / (LANE_Y - VPY)
@@ -1750,7 +1750,7 @@ body.extend(far_peds)
 # ------------------------------------------------ un peatón dobla en la esquina y se va por la calle del fondo
 # Viene por la vereda de enfrente, dobla en la esquina y sigue por la vereda izquierda de la calle del fondo,
 # en perspectiva, hasta perderse en la bruma. En tiempo efectivo: se congela con el resto.
-TA0, TTURN, TB1 = 16.0, 19.5, 23.5                       # tiempos efectivos: llega, dobla, desaparece
+TA0, TTURN, TB1 = 16.0 + SHIFT, 19.5 + SHIFT, 23.5 + SHIFT                       # tiempos efectivos: llega, dobla, desaparece
 XS = -(WR + 6)                                            # vereda izquierda de la calle del fondo
 z_t = F * HC / (FAR_SW_Y - VPY)
 x_corner = VPX + F * XS / z_t                            # en coordenadas del tile
@@ -2072,7 +2072,7 @@ DW_H = round(PERSP_K * (DW_Y - HORIZON))
 DOG_H = max(6, round(DW_H * .26))                            # ~45 cm a la cruz
 DW_WORLD = 18.0                                              # paseo tranquilo (~0.9 m/s)
 DW_REL = DW_WORLD + NEAR_SPEED
-DW_T0 = 2.5                                                  # entra por la izquierda
+DW_T0 = 2.5 + SHIFT                                                  # entra por la izquierda
 DW_T1 = DW_T0 + (W + 120) / DW_REL                           # sale por la derecha
 dw_look = dict(crowd_look("f_coat", random.Random(77)), coat=(96, 70, 58), long_hair=True, hair=(150, 96, 56))
 A_dw, cyc_dw = gait_params(DW_H, DW_WORLD)
@@ -2194,7 +2194,7 @@ def woman_in_red(h, frame, phase=None, amp=.4):
 AGENT = dict(coat=(36, 40, 40), shirt=(226, 230, 222), skin=(214, 172, 140), hair=(28, 24, 20), tie=(8, 8, 8),
              shades=(6, 6, 8), earpiece=(200, 200, 190), pants=(30, 32, 34), coat_len=13.5)
 WY = LANE_FAR
-WH, APPEAR, TURN = round(PERSP_K * (WY - HORIZON)), 14.3, 18.6                                            # carril medio: entre la multitud y los protagonistas
+WH, APPEAR, TURN = round(PERSP_K * (WY - HORIZON)), 14.3 + SHIFT, 18.6 + SHIFT                                            # carril medio: entre la multitud y los protagonistas
 W_WORLD = 47 - NEAR_SPEED                                # su velocidad propia (WV relativo menos la cámara)
 A_w, cyc_w = gait_params(WH, W_WORLD)
 wred = walk_frames(lambda ph, a: woman_in_red(WH, 0, phase=ph, amp=a), A_w)
@@ -2478,10 +2478,10 @@ CLX, LUX = 98, 146
 # ============================================================ congelado: fundido a negro y lluvia de código
 # Todo se apaga a negro (rápido, empezando un instante antes del congelado), cae la lluvia de código de
 # Matrix y sólo quedan Claude y Lucas. Al terminar, la lluvia se apaga y la calle vuelve.
-css.append(f"@keyframes blackout{{0%,{pct(F0 - .6):.3f}%{{opacity:0}}{pct(F0):.3f}%,{pct(F1):.3f}%{{opacity:1}}"
-           f"{pct(F1 + .7):.3f}%,100%{{opacity:0}}}}")
-css.append(f"@keyframes rainvis{{0%,{pct(F0 - .25):.3f}%{{opacity:0}}{pct(F0 + .5):.3f}%,{pct(F1 - .5):.3f}%{{opacity:1}}"
-           f"{pct(F1 + .1):.3f}%,100%{{opacity:0}}}}")
+css.append(f"@keyframes blackout{{0%{{opacity:1}}{pct(.8):.3f}%,{pct(F0 - .6):.3f}%{{opacity:0}}{pct(F0):.3f}%,100%{{opacity:1}}}}")
+css.append(f"@keyframes rainvis{{0%{{opacity:1}}{pct(.6):.3f}%,{pct(F0 - .25):.3f}%{{opacity:0}}{pct(F0 + .5):.3f}%,100%{{opacity:1}}}}")
+# Claude y Lucas se disuelven en el código al final y aparecen caminando juntos al empezar
+css.append(f"@keyframes heroio{{0%{{opacity:0}}{pct(.7):.3f}%,{pct(T - 1.6):.3f}%{{opacity:1}}{pct(T - .3):.3f}%,100%{{opacity:0}}}}")
 body.append(rect(-60, -80, W + 120, H + 160, "#000", f' opacity="0" style="animation:blackout {T}s infinite linear"'))
 rrng = random.Random(1999)
 RAIN_GLYPHS = [c for c in MINI if c not in " .,'"]
@@ -2510,31 +2510,26 @@ for cx_ in range(-12, W + 12, 5):
     rain2.append(f'<g style="animation:{k} {dur:.2f}s {dl:.2f}s infinite linear">{"".join(glyphs)}</g>')
 body.append(f'<g opacity="0" style="animation:rainvis {T}s infinite linear">{"".join(rain2)}</g>')
 
+HERO_START = len(body)
 body.append(f'<ellipse cx="{CLX + cl[0].width / 2}" cy="{FEET}" rx="8" ry="1.6" fill="#000" opacity=".22"/>')
 body.append(protagonist(cl, cl_idle, CLX, cyc_c))
 
 # ------------------------------------------------ Lucas se queda de pie, distraído con la mujer de rojo
 # Camina junto a Claude; al verla venir de frente se frena (queda quieto en el mundo, así que la cámara,
 # que sigue a Claude, lo deja atrás); cuando ella pasa se da vuelta y la sigue con la mirada hasta que se
-# vuelve agente y todo se congela. Al descongelarse apura el paso y recupera su lugar junto a Claude.
-T_STOP = 17.2                                            # se frena
+# vuelve agente y todo se funde a negro. La vuelta termina ahí y empieza de nuevo con los dos juntos.
+T_STOP = 17.2 + SHIFT                                            # se frena
 T_TURN = APPEAR + (LUX + 10 + NEAR_SPEED * 0) / 1 * 0    # (se recalcula abajo)
-T_BACK = 31.6                                            # vuelve a su lugar
 # instante en que ella lo pasa: su x = WX0 + WV (t - APPEAR); la de él = LUX + NEAR_SPEED (t - T_STOP)
 T_TURN = (LUX - WX0 + WV * APPEAR - NEAR_SPEED * T_STOP) / (WV - NEAR_SPEED)
 LAG = NEAR_SPEED * (F0 - T_STOP)                         # cuánto queda atrás al congelarse
-V_CATCH = NEAR_SPEED + LAG / (T_BACK - F1)               # paso apurado para alcanzar a Claude
-A_f, cyc_f = gait_params(PH, V_CATCH, cadence=.95, amax=.5)
-lu_fast = walk_frames(lambda ph, a: hero("neo", PH, ph, a), A_f)
 lu_stand_l = hero("neo", PH, 0.0, .04)                   # parado mirándola venir
 lu_stand_r = hero("neo", PH, 0.0, .04, facing_right=True)   # se da vuelta y la sigue con la mirada
-css.append(f"@keyframes lucx{{0%,{pct(T_STOP):.3f}%{{transform:translateX(0)}}{pct(F0):.3f}%,{pct(F1):.3f}%"
-           f"{{transform:translateX({LAG:.2f}px)}}{pct(T_BACK):.3f}%,100%{{transform:translateX(0)}}}}")
-css.append(f"@keyframes lwalk{{0%,{pct(T_STOP) - .001:.3f}%{{opacity:1}}{pct(T_STOP):.3f}%,{pct(T_BACK) - .001:.3f}%{{opacity:0}}"
-           f"{pct(T_BACK):.3f}%,100%{{opacity:1}}}}")
+css.append(f"@keyframes lucx{{0%,{pct(T_STOP):.3f}%{{transform:translateX(0)}}{pct(F0):.3f}%,100%"
+           f"{{transform:translateX({LAG:.2f}px)}}}}")
+css.append(f"@keyframes lwalk{{0%,{pct(T_STOP) - .001:.3f}%{{opacity:1}}{pct(T_STOP):.3f}%,100%{{opacity:0}}}}")
 lstand_l = window(T_STOP, T_TURN)
 lstand_r = window(T_TURN, F1)
-lfast = window(F1, T_BACK)
 
 
 def frames_svg(frames, cyc, delay=0.0):
@@ -2546,8 +2541,9 @@ lucas_svg = (f'<ellipse cx="{LUX + lu[0].width / 2}" cy="{FEET}" rx="8" ry="1.6"
              f'<g style="animation:lwalk {T}s infinite linear">{frames_svg(lu, cyc_p, -cyc_p * .4)}</g>'
              f'<g opacity="0" style="{lstand_l}">{image(lu_stand_l, LUX, FEET - lu_stand_l.height + 1, up=1)}</g>'
              f'<g opacity="0" style="{lstand_r}">{image(lu_stand_r, LUX, FEET - lu_stand_r.height + 1, up=1)}</g>'
-             f'<g opacity="0" style="{lfast}">{frames_svg(lu_fast, cyc_f)}</g>')
+             )
 body.append(f'<g style="animation:lucx {T}s infinite linear">{lucas_svg}</g>')
+body[HERO_START:] = [f'<g opacity="0" style="animation:heroio {T}s infinite linear">{"".join(body[HERO_START:])}</g>']
 
 # ============================================================ cámara más cerca
 scene_svg = "".join(body)
