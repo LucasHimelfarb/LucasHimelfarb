@@ -486,8 +486,10 @@ def street_corridor():
             bid += 1
             z += ln + (rnd.uniform(30, 70) if rnd.random() < .12 else 0)   # a veces, otra bocacalle
 
-    py, px = np.mgrid[0:AVE_TOP + 4, GX:GX + GW].astype(float)
-    dx, dy = px + .5 - VPX, py + .5 - VPY
+    SS = 3                                                # supermuestreo 3x3: bordes en diagonal sin escalones
+    rows, cols = AVE_TOP + 4, GW
+    py, px = np.meshgrid((np.arange(rows * SS) + .5) / SS, GX + (np.arange(cols * SS) + .5) / SS, indexing="ij")
+    dx, dy = px - VPX, py - VPY
     adx = np.abs(dx)
     sgn = np.where(dx < 0, -1, 1)
     best = np.full(px.shape, np.inf)
@@ -546,9 +548,12 @@ def street_corridor():
 
     t = 1 - np.exp(-np.clip(best - Z0, 0, None) / 1100)
     haze = np.array([196, 210, 186], float)
-    out = np.zeros(px.shape + (4,))
-    out[..., :3] = np.clip(rgb * (1 - t[..., None]) + haze * t[..., None], 0, 255)
-    out[..., 3] = hit * 255
+    fine = np.clip(rgb * (1 - t[..., None]) + haze * t[..., None], 0, 255)
+    sky_bg = np.repeat(np.repeat(far_rgb[:rows, GX:GX + GW], SS, 0), SS, 1)   # lo que se ve detrás: el cielo
+    fine = np.where(hit[..., None], fine, sky_bg)
+    out = np.zeros((rows, cols, 4))
+    out[..., :3] = fine.reshape(rows, SS, cols, SS, 3).mean((1, 3))
+    out[..., 3] = (hit.reshape(rows, SS, cols, SS).mean((1, 3)) > 0) * 255
     return out, 0
 
 
@@ -568,23 +573,27 @@ for zq, colq in sorted([(112, VEH_COLS[2]), (150, VEH_COLS[1]), (198, VEH_COLS[0
             if ca[yy_q, xx_q, 3] > 0 and 0 <= ty_ < corr.shape[0] and 0 <= tx_ < corr.shape[1]:
                 corr[ty_, tx_, :3] = ca[yy_q, xx_q, :3]; corr[ty_, tx_, 3] = 255
 # alumbrado público en las veredas de la calle transversal, en perspectiva
-lamp_cv = Image.new("RGBA", (corr.shape[1], corr.shape[0]), (0, 0, 0, 0)); ld = ImageDraw.Draw(lamp_cv)
+LS = 3                                                   # postes dibujados a 3x y reducidos (sin escalones)
+lamp_cv = Image.new("RGBA", (corr.shape[1] * LS, corr.shape[0] * LS), (0, 0, 0, 0)); ld = ImageDraw.Draw(lamp_cv)
 for zl in sorted(np.arange(118, 2600, 95), reverse=True):
     t_h = 1 - np.exp(-(zl - Z0) / 1100)
     pole = tuple(int(v) for v in np.array([44, 50, 48]) * (1 - t_h) + np.array([196, 210, 186]) * t_h) + (255,)
     head = tuple(int(v) for v in np.array([226, 230, 210]) * (1 - t_h) + np.array([196, 210, 186]) * t_h) + (255,)
-    wdt = max(1, round(1.6 * Z0 / zl))
+    wdt = max(1, round(1.4 * Z0 / zl * LS))
     for sd in (-1, 1):
         Xl = sd * (WR + 4)
-        xb = VPX + F * Xl / zl - GX
-        yb, yt = VPY + F * HC / zl - cy0, VPY + F * (HC - 34) / zl - cy0
-        xa = VPX + F * (Xl - sd * 7) / zl - GX
+        xb = (VPX + F * Xl / zl - GX) * LS
+        yb, yt = (VPY + F * HC / zl - cy0) * LS, (VPY + F * (HC - 34) / zl - cy0) * LS
+        xa = (VPX + F * (Xl - sd * 7) / zl - GX) * LS
+        hw, hh = 2.2 * Z0 / zl * LS, max(LS, 1.2 * Z0 / zl * LS)
         ld.line([(xb, yb), (xb, yt)], fill=pole, width=wdt)
         ld.line([(xb, yt), (xa, yt)], fill=pole, width=wdt)
-        ld.rectangle([min(xa, xa + sd * 2.2 * Z0 / zl), yt, max(xa, xa + sd * 2.2 * Z0 / zl), yt + max(1, 1.2 * Z0 / zl)], fill=head)
-la = np.asarray(lamp_cv, dtype=float)
-lm = la[..., 3] > 0
-corr[lm, :3] = la[lm, :3]; corr[lm, 3] = 255
+        ld.rectangle([min(xa, xa + sd * hw), yt, max(xa, xa + sd * hw), yt + hh], fill=head)
+la = np.asarray(lamp_cv.resize((corr.shape[1], corr.shape[0]), Image.BOX), dtype=float)
+lam = la[..., 3:4] / 255
+lrgb = np.where(lam > 0, la[..., :3] / np.maximum(lam, 1e-6), 0)
+corr[..., :3] = corr[..., :3] * (1 - lam) + lrgb * lam
+corr[..., 3] = np.maximum(corr[..., 3], (lam[..., 0] > .35) * 255)
 cm = corr[..., 3] > 0
 reg = near[cy0:cy0 + corr.shape[0], GX:GX + GW]
 reg[cm, :3] = corr[cm, :3]; reg[cm, 3] = 255
@@ -882,6 +891,44 @@ for cx_ in range(2, W, 7):
 body.append(f'<g opacity="0" style="{FRZ_VIS}">{"".join(rain)}</g>')
 
 # ============================================================ tránsito sobre la avenida
+# ============================================================ arquetipos de la multitud
+DENIM = [(54, 70, 104), (70, 86, 118), (40, 48, 70)]
+TEE = [(196, 60, 52), (214, 170, 70), (60, 120, 118), (226, 226, 218), (90, 110, 150), (130, 70, 110)]
+SNEAK = [(226, 226, 220), (40, 40, 44), (190, 60, 50)]
+
+
+def crowd_look(kind, rng):
+    base = dict(skin=rng.choice(SKIN), hair=rng.choice(HAIR))
+    if kind == "m_suit":        # hombre de traje
+        return dict(base, coat=rng.choice(SUIT), shirt=rng.choice([(200, 206, 196), (220, 220, 210)]),
+                    tie=rng.choice([(40, 60, 50), (90, 40, 40), (30, 30, 60)]), coat_len=13.5)
+    if kind == "m_casual":      # remera, jean, zapatillas; a veces gorra y mochila
+        tee = rng.choice(TEE)
+        return dict(base, coat=tee, shirt=tee, pants=rng.choice(DENIM), shoe=rng.choice(SNEAK), sole=(236, 236, 230),
+                    short_sleeves=True, coat_len=12.2, ballcap=rng.choice([None, (40, 60, 100), (150, 40, 40)]),
+                    backpack=rng.choice([None, (60, 66, 70), (120, 90, 50)]))
+    if kind == "m_jacket":      # campera, chino, barba
+        return dict(base, coat=rng.choice([(90, 96, 60), (70, 48, 34), (40, 40, 44), (120, 96, 70)]),
+                    shirt=rng.choice(TEE), pants=rng.choice([(150, 132, 96), (60, 62, 58), (48, 56, 76)]),
+                    shoe=(70, 50, 36), coat_len=12.0, beard=rng.choice([None, base["hair"]]))
+    if kind == "f_suit":        # mujer de saco y pollera tubo, rodete, tacos
+        c = rng.choice(SUIT + [(110, 40, 50), (40, 50, 80)])
+        return dict(base, female=True, coat=c, skirt=c, pencil=True, skirt_len=15.6, pants=(196, 160, 136),
+                    shoe=(20, 20, 22), heels=True, bun=True, coat_len=10.4, shirt=(226, 226, 220),
+                    hair=rng.choice(HAIR[:3] + [(190, 150, 80)]))
+    if kind == "f_casual":      # suéter, jean, colita, tote
+        return dict(base, female=True, coat=rng.choice(TEE + [(200, 180, 160)]), shirt=(226, 226, 220),
+                    pants=rng.choice(DENIM), shoe=rng.choice(SNEAK), sole=(236, 236, 230), coat_len=10.0,
+                    ponytail=True, long_hair=False, bag=rng.choice([(196, 170, 120), (60, 50, 44), (150, 60, 50)]),
+                    hair=rng.choice(HAIR[:3] + [(190, 150, 80), (150, 60, 40)]))
+    # f_coat: piloto beige a la rodilla, pelo largo, medias y botas
+    return dict(base, female=True, coat=rng.choice([(176, 150, 110), (120, 110, 100), (60, 64, 70)]),
+                shirt=(226, 220, 210), pants=(36, 32, 34), shoe=(40, 28, 24), coat_len=15.8, long_hair=True,
+                belt=rng.choice([None, (120, 96, 66)]), hair=rng.choice(HAIR[:3] + [(190, 150, 80), (150, 60, 40)]))
+
+
+KINDS = ["m_suit", "f_casual", "m_casual", "f_suit", "m_jacket", "f_coat"]
+
 # ------------------------------------------------ un auto dobla en la esquina y se pierde por la calle
 def eff(t):
     return t if t < F0 else (F0 if t < F1 else t - (F1 - F0))
@@ -926,6 +973,39 @@ copy_off = round((scr_turn - (tile_g(T_TURN) % W) - x_turn) / W) * W
 turn_svg = f'<g transform="translate({copy_off} 0)">{turn_svg}</g>'
 body.append(f'<g style="{track(TILE0, NEAR_SPEED, W, 0, 0)}"><g style="{WALK_VIS}">{turn_svg}</g></g>')
 
+# ------------------------------------------------ gente caminando por las veredas de la calle transversal
+PREF, PH_Z0 = 18, 8.2                                    # alto del sprite y alto de una persona a la distancia z0
+ZN, ZR = 104.0, 640.0                                    # tramo de vereda que recorren
+peds = []
+prng = random.Random(7)
+for i in range(10):
+    sd = (-1, 1)[i % 2]
+    X = sd * (WR + 3.5 + prng.uniform(0, 6))
+    away = prng.random() < .5
+    vz = ZR / WALK * prng.choice([1, 1, 2])            # vueltas enteras por ciclo: el loop cierra
+    zst = prng.uniform(0, ZR)
+    look = crowd_look(KINDS[(i * 5) % len(KINDS)], prng)
+    fr = [figure(PREF, 0, look), figure(PREF, 1, look)]
+    flip = (sd > 0) != away                              # de perfil, mirando hacia donde camina
+    kf = []
+    for t in np.arange(0, T + .001, .5):
+        e = eff(t)
+        q = (zst + vz * e) % ZR
+        z = ZN + (q if away else ZR - q)
+        s_ = PH_Z0 * Z0 / z / PREF
+        x = VPX + F * X / z - fr[0].width * s_ / 2
+        y = VPY + F * HC / z - PREF * s_
+        th = 1 - np.exp(-(z - Z0) / 1100)
+        op = min(1.0, q / 14, (ZR - q) / 14) * max(0.0, 1 - th * 1.1)   # aparece/desaparece en los extremos
+        kf.append(f"{pct(t):.2f}%{{transform:translate({x:.1f}px,{y:.1f}px) scale({s_:.3f});opacity:{op:.2f}}}")
+    k = nid("cp")
+    css.append(f"@keyframes {k}{{{''.join(kf)}}}")
+    spr = sprite_group(fr, 0, 0, step=.5, freeze_img=frozen(fr[0]), flip=flip)
+    peds.append(f'<g style="transform-origin:0 0;animation:{k} {T}s infinite linear">{spr}</g>')
+cross_peds = "".join(peds)
+cross_peds += f'<g transform="translate({-W} 0)">{cross_peds}</g>'
+body.append(f'<g style="{track(TILE0, NEAR_SPEED, W, 0, 0)}">{cross_peds}</g>')
+
 # tamaño real respecto de la gente (persona ~37 px = 1.75 m): auto ~4.6 m de largo
 CSPAN, CMARG = W + 320, 160
 LANES = [  # (base y, sentido, k: vueltas por ciclo, vehículos [(tipo, largo)])
@@ -969,44 +1049,6 @@ for ly, dirn, k, vehs in LANES:
         spr = (f'<g style="{WALK_VIS}">{image(im, 0, -im.height + 2, up=1)}</g>'
                f'<g opacity="0" style="{FRZ_VIS}">{image(frozen(im), 0, -im.height + 2, up=1)}</g>')
         body.append(f'<g style="{track(x0, v, CSPAN, CMARG, ly)}">{spr}</g>')
-
-# ============================================================ arquetipos de la multitud
-DENIM = [(54, 70, 104), (70, 86, 118), (40, 48, 70)]
-TEE = [(196, 60, 52), (214, 170, 70), (60, 120, 118), (226, 226, 218), (90, 110, 150), (130, 70, 110)]
-SNEAK = [(226, 226, 220), (40, 40, 44), (190, 60, 50)]
-
-
-def crowd_look(kind, rng):
-    base = dict(skin=rng.choice(SKIN), hair=rng.choice(HAIR))
-    if kind == "m_suit":        # hombre de traje
-        return dict(base, coat=rng.choice(SUIT), shirt=rng.choice([(200, 206, 196), (220, 220, 210)]),
-                    tie=rng.choice([(40, 60, 50), (90, 40, 40), (30, 30, 60)]), coat_len=13.5)
-    if kind == "m_casual":      # remera, jean, zapatillas; a veces gorra y mochila
-        tee = rng.choice(TEE)
-        return dict(base, coat=tee, shirt=tee, pants=rng.choice(DENIM), shoe=rng.choice(SNEAK), sole=(236, 236, 230),
-                    short_sleeves=True, coat_len=12.2, ballcap=rng.choice([None, (40, 60, 100), (150, 40, 40)]),
-                    backpack=rng.choice([None, (60, 66, 70), (120, 90, 50)]))
-    if kind == "m_jacket":      # campera, chino, barba
-        return dict(base, coat=rng.choice([(90, 96, 60), (70, 48, 34), (40, 40, 44), (120, 96, 70)]),
-                    shirt=rng.choice(TEE), pants=rng.choice([(150, 132, 96), (60, 62, 58), (48, 56, 76)]),
-                    shoe=(70, 50, 36), coat_len=12.0, beard=rng.choice([None, base["hair"]]))
-    if kind == "f_suit":        # mujer de saco y pollera tubo, rodete, tacos
-        c = rng.choice(SUIT + [(110, 40, 50), (40, 50, 80)])
-        return dict(base, female=True, coat=c, skirt=c, pencil=True, skirt_len=15.6, pants=(196, 160, 136),
-                    shoe=(20, 20, 22), heels=True, bun=True, coat_len=10.4, shirt=(226, 226, 220),
-                    hair=rng.choice(HAIR[:3] + [(190, 150, 80)]))
-    if kind == "f_casual":      # suéter, jean, colita, tote
-        return dict(base, female=True, coat=rng.choice(TEE + [(200, 180, 160)]), shirt=(226, 226, 220),
-                    pants=rng.choice(DENIM), shoe=rng.choice(SNEAK), sole=(236, 236, 230), coat_len=10.0,
-                    ponytail=True, long_hair=False, bag=rng.choice([(196, 170, 120), (60, 50, 44), (150, 60, 50)]),
-                    hair=rng.choice(HAIR[:3] + [(190, 150, 80), (150, 60, 40)]))
-    # f_coat: piloto beige a la rodilla, pelo largo, medias y botas
-    return dict(base, female=True, coat=rng.choice([(176, 150, 110), (120, 110, 100), (60, 64, 70)]),
-                shirt=(226, 220, 210), pants=(36, 32, 34), shoe=(40, 28, 24), coat_len=15.8, long_hair=True,
-                belt=rng.choice([None, (120, 96, 66)]), hair=rng.choice(HAIR[:3] + [(190, 150, 80), (150, 60, 40)]))
-
-
-KINDS = ["m_suit", "f_casual", "m_casual", "f_suit", "m_jacket", "f_coat"]
 
 # ============================================================ multitud (fila de atrás)
 SPAN, MARGIN = W + 60, 30
