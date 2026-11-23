@@ -469,6 +469,16 @@ HC = (AVE_TOP - VPY) * Z0 / F                         # altura de la cámara: el
 WR = WC * .72                                         # semiancho de la calzada
 
 
+XW_N, XW_P, XW_W = 9, 7.0, 3.6                       # sendas: 9 rayas enteras, cada 7, de 3.6 de ancho
+
+
+def zebra(Xs):
+    """True donde cae una raya de senda: rayas enteras y centradas en la calzada (sin recortes)."""
+    s0 = -((XW_N - 1) * XW_P + XW_W) / 2
+    k = np.floor((Xs - s0) / XW_P)
+    return (k >= 0) & (k < XW_N) & (((Xs - s0) - k * XW_P) < XW_W)
+
+
 def street_corridor():
     """Calle transversal en perspectiva de un punto, con edificios como volúmenes.
 
@@ -524,7 +534,7 @@ def street_corridor():
         g[X > WR + 1.2] = (150, 158, 140)
         dash = (X < 1.4) & ((zg % 50) < 24) & (zg > Z0 + 8)
         g[dash] = (210, 204, 150)
-        far_xw = (zg >= 86) & (zg < Z0 - .5) & (X < WR - 1.5) & (((X + WR) % 7) < 3.6)   # senda de enfrente
+        far_xw = (zg >= 86) & (zg < Z0 - .5) & zebra(sgn * X)                                    # senda de enfrente
         g[far_xw] = (226, 228, 214)
         stop_far = (zg >= 105.5) & (zg < 108.5) & (X < WR - .3)                              # línea de detención (ambos carriles)
         g[stop_far] = (236, 238, 228)
@@ -693,16 +703,6 @@ def manhole(cx_, cy_, rx, ry):
 diamond_plate(22, H - 12, 22, 9)
 diamond_plate(GX + GW + 22, H - 13, 24, 10)
 manhole(120, GROUND + 7, 6, 2.4)
-# hidrante junto al cordón
-HX, HB = GX - 30, GROUND + 6
-hyd = Image.new("RGBA", (9, 14), (0, 0, 0, 0)); hd = ImageDraw.Draw(hyd)
-hd.rectangle([2, 4, 6, 12], fill=(176, 40, 40)); hd.rectangle([1, 12, 7, 13], fill=(140, 30, 30))
-hd.ellipse([2, 1, 6, 5], fill=(190, 48, 48)); hd.rectangle([3, 0, 5, 1], fill=(150, 34, 34))
-hd.rectangle([0, 6, 8, 7], fill=(160, 36, 36)); hd.point((4, 3), fill=(230, 120, 110))
-hd.rectangle([2, 5, 2, 11], fill=(214, 90, 84))
-ha = np.asarray(hyd, dtype=float); hm = ha[..., 3] > 0
-ys_h, xs_h = np.nonzero(hm)
-near[HB - 14 + ys_h, HX + xs_h, :3] = ha[ys_h, xs_h, :3]
 
 # Intersección con una sola perspectiva: la de la calle del fondo. Cada punto del piso se ubica en
 # coordenadas reales de esa calle (X a lo ancho, z en profundidad) y se proyecta igual que allá:
@@ -732,12 +732,22 @@ for y_ in range(AVE_TOP + 4, H):
     else:                                                # nuestra vereda
         near[y_, road, :3] = (70, 76, 74)
         if GROUND + 2 <= y_ < XW_END:
-            stripe = (aX < WR - 1.5) & (((Xr + WR) % 7) < 3.6)
+            stripe = zebra(Xr)
             near[y_, stripe, :3] = (226, 228, 214)
         elif XW_END + 4 <= y_ < XW_END + 6:                # línea de detención, separada y a lo ancho de la calle
             near[y_, aX < WR - .5, :3] = (236, 238, 228)
         curb = (aX > WR) & (aX <= WR + max(.8, 1.2 / f_))
         near[y_, curb, :3] = (200, 202, 196)
+# hidrante junto al cordón (después de las sendas: queda por delante)
+HX, HB = GX - 30, GROUND + 6
+hyd = Image.new("RGBA", (9, 14), (0, 0, 0, 0)); hd = ImageDraw.Draw(hyd)
+hd.rectangle([2, 4, 6, 12], fill=(176, 40, 40)); hd.rectangle([1, 12, 7, 13], fill=(140, 30, 30))
+hd.ellipse([2, 1, 6, 5], fill=(190, 48, 48)); hd.rectangle([3, 0, 5, 1], fill=(150, 34, 34))
+hd.rectangle([0, 6, 8, 7], fill=(160, 36, 36)); hd.point((4, 3), fill=(230, 120, 110))
+hd.rectangle([2, 5, 2, 11], fill=(214, 90, 84))
+ha = np.asarray(hyd, dtype=float); hm = ha[..., 3] > 0
+ys_h, xs_h = np.nonzero(hm)
+near[HB - 14 + ys_h, HX + xs_h, :3] = ha[ys_h, xs_h, :3]
 for _ in range(3):                                                      # postes / farolas
     px = random.choice([random.randrange(10, GX - 12), random.randrange(GX + GW + 8, W - 10)])
     near[30:GROUND + 2, px:px + 2, :3] = (40, 48, 44); near[30:GROUND + 2, px:px + 2, 3] = 255
