@@ -1156,6 +1156,55 @@ cross_peds = "".join(peds)
 cross_peds += f'<g transform="translate({-TW} 0)">{cross_peds}</g>'
 body.append(f'<g style="{track(TILE0, NEAR_SPEED, TW, 0, 0)}">{cross_peds}</g>')
 
+# ------------------------------------------------ gente en la vereda de enfrente (detrás del tránsito)
+FAR_SW_Y = AVE_TOP + 2.5                                 # pies sobre la vereda de enfrente
+FAR_H = round(PERSP_K * (FAR_SW_Y - HORIZON))            # ~20 px: misma regla de perspectiva
+frng = random.Random(31)
+FSPAN, FMARG = W + 60, 30
+far_peds = []
+for i in range(7):
+    look = crowd_look(KINDS[(i * 7 + 3) % len(KINDS)], frng)
+    right = i % 2 == 0
+    k = 3 if right else 1                                # relativo a la cámara: los de la derecha la superan
+    v = k * FSPAN / WALK
+    fr = [figure(FAR_H, 0, look), figure(FAR_H, 1, look)]
+    spr = sprite_group(fr, 0, -FAR_H, step=.5, freeze_img=frozen(fr[0]), flip=right)
+    far_peds.append(f'<g style="{track(i * FSPAN / 7 + frng.uniform(-10, 10), v, FSPAN, FMARG, FAR_SW_Y + frng.uniform(-.6, .6))}">{spr}</g>')
+body.extend(far_peds)
+
+# ------------------------------------------------ un peatón dobla en la esquina y se va por la calle del fondo
+# Viene por la vereda de enfrente, dobla en la esquina y sigue por la vereda izquierda de la calle del fondo,
+# en perspectiva, hasta perderse en la bruma. En tiempo efectivo: se congela con el resto.
+TA0, TTURN, TB1 = 16.0, 19.5, 23.5                       # tiempos efectivos: llega, dobla, desaparece
+XS = -(WR + 6)                                            # vereda izquierda de la calle del fondo
+z_t = F * HC / (FAR_SW_Y - VPY)
+x_corner = VPX + F * XS / z_t                            # en coordenadas del tile
+V_A = 15.0                                               # paso por la vereda de enfrente (px/s)
+kz_t = np.log(1500 / z_t) / (TB1 - TTURN)
+look_t = crowd_look("f_coat", random.Random(5))
+fr_t = [figure(FAR_H, 0, look_t), figure(FAR_H, 1, look_t)]
+kf_t = []
+for t in np.arange(0, T + .001, .2):
+    e = eff(t)
+    if e < TA0 - .2 or e > TB1:
+        x, y, sc, op = x_corner, FAR_SW_Y, 1.0, 0.0
+    elif e <= TTURN:
+        x, y, sc, op = x_corner - V_A * (TTURN - e), FAR_SW_Y, 1.0, min(1.0, max(0.0, (e - TA0 + .2) / .2))
+    else:
+        z = z_t * np.exp(kz_t * (e - TTURN))
+        sc = z_t / z
+        x, y = VPX + F * XS / z, VPY + F * HC / z
+        op = max(0.0, 1 - (1 - np.exp(-(z - Z0) / 1100)) * 1.15)
+    kf_t.append(f"{pct(t):.2f}%{{transform:translate({x:.1f}px,{y:.1f}px) scale({sc:.3f});opacity:{op:.2f}}}")
+kt_ = nid("turnP")
+css.append(f"@keyframes {kt_}{{{''.join(kf_t)}}}")
+# va en las dos copias del tramo: siempre está cerca de la esquina, así la otra copia queda fuera de cuadro
+# y la vuelta del tramo no lo hace saltar
+turner_one = (f'<g style="transform-origin:0 0;animation:{kt_} {T}s infinite linear">'
+              f'{sprite_group(fr_t, -fr_t[0].width / 2, -FAR_H, step=.5, freeze_img=frozen(fr_t[0]), flip=True)}</g>')
+turner = "".join(f'<g transform="translate({off} 0)">{turner_one}</g>' for off in (0, -TW))
+body.append(f'<g style="{track(TILE0, NEAR_SPEED, TW, 0, 0)}">{turner}</g>')
+
 # tamaño real respecto de la gente (persona ~37 px = 1.75 m): auto ~4.6 m de largo
 CSPAN, CMARG = W + 320, 160
 LANES = [  # (base y, sentido, k: vueltas por ciclo, vehículos [(tipo, largo)])
@@ -1374,6 +1423,7 @@ body.append(f'<g style="{track(TILE0, NEAR_SPEED, TW, 0, 0)}">{hyd_svg}</g>')
 # Carril de enfrente: gente que va hacia la derecha. Carril cercano (el nuestro): gente que viene hacia
 # la izquierda como Claude y Lucas, un poco más rápido, pasándolos por detrás.
 SPAN, MARGIN = W + 60, 30
+KEEP_OUR_SIDE = {1, 2, 4, 5, 7, 10}                 # menos gente de este lado: 4 en el carril de enfrente, 2 en el nuestro
 crowd_back = []
 for i in range(11):
     kind = KINDS[i % len(KINDS)]
@@ -1388,7 +1438,10 @@ for i in range(11):
     flip = k > 0                                   # los que van a la derecha miran a la derecha
     fr = [figure(h, 0, look), figure(h, 1, look)]
     s = sprite_group(fr, 0, -h, step=random.choice([.45, .5, .55]), freeze_img=frozen(fr[0]), flip=flip)
-    crowd_back.append((ly, f'<g style="{track(i * SPAN / 11 + random.uniform(-8, 8), v, SPAN, MARGIN, ly)}">{s}</g>'))
+    x0_c = i * SPAN / 11 + random.uniform(-8, 8)
+    if i not in KEEP_OUR_SIDE:                         # (se generan igual para no alterar la secuencia aleatoria)
+        continue
+    crowd_back.append((ly, f'<g style="{track(x0_c, v, SPAN, MARGIN, ly)}">{s}</g>'))
 crowd_back = [g_ for _, g_ in sorted(crowd_back, key=lambda c: c[0])]   # el carril de enfrente se dibuja primero
 body.extend(crowd_back)
 
