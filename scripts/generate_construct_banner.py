@@ -1050,18 +1050,89 @@ for ly, dirn, k, vehs in LANES:
                f'<g opacity="0" style="{FRZ_VIS}">{image(frozen(im), 0, -im.height + 2, up=1)}</g>')
         body.append(f'<g style="{track(x0, v, CSPAN, CMARG, ly)}">{spr}</g>')
 
-# ============================================================ patrullero estacionado contra nuestro cordón
-# Va en el carril de estacionamiento (más cerca que el tránsito y más lejos que la gente de la vereda),
-# en el sentido del carril cercano. El oficial, a escala del auto (~1.75 m contra ~1.45 m), está en la
-# calle frente al auto con un pie apoyado en el paragolpe.
-PCX, PCL = 40, 80                                        # posición en el tile y largo
+# ============================================================ escena de infracción junto a nuestro cordón
+# En el carril de estacionamiento (más cerca que el tránsito, más lejos que la gente de la vereda), de
+# izquierda a derecha: el patrullero con la sirena, el oficial y un auto estacionado frente a un cartel de
+# prohibido estacionar. El oficial, a escala de los autos (~1.75 m contra ~1.45 m), apoya un pie en el
+# paragolpe trasero del infractor y escribe la multa. La escena cruza la costura del tile (x > W).
+def officer_writing(h, k):
+    """Policía mirando a la derecha, pie sobre un paragolpe, escribiendo en la libreta (cuadro k de 4)."""
+    u = h / 24
+    w = int(12 * u) + 6
+    im = Image.new("RGBA", (w, h + 1), (0, 0, 0, 0)); d = ImageDraw.Draw(im)
+    cx = w * .38
+    navy, navy_d, skin, shoe = (30, 40, 74), (22, 30, 56), (196, 150, 118), (12, 12, 14)
+    foot = h - 1
+    d.polygon([(cx - 1.0 * u, 12.5 * u), (cx + .9 * u, 12.5 * u), (cx + .7 * u, foot - u), (cx - .9 * u, foot - u)], fill=navy_d)
+    d.rectangle([cx - .9 * u, foot - u, cx + 1.4 * u, foot], fill=shoe)
+    kx, ky = cx + 3.4 * u, 12.6 * u                                     # rodilla
+    fx, fy = cx + 4.6 * u, foot - 6.2 * u                               # pie sobre el paragolpe
+    d.polygon([(cx - .6 * u, 12.0 * u), (cx + .8 * u, 13.4 * u), (kx + .6 * u, ky + .6 * u), (kx - .2 * u, ky - .7 * u)], fill=navy)
+    d.polygon([(kx - .4 * u, ky), (kx + .8 * u, ky), (fx + .6 * u, fy - u), (fx - .6 * u, fy - u)], fill=navy)
+    d.rectangle([fx - .8 * u, fy - u, fx + 1.6 * u, fy], fill=shoe)
+    d.polygon([(cx - 1.4 * u, 4.6 * u), (cx + 1.5 * u, 4.4 * u), (cx + 1.8 * u, 12.6 * u), (cx - 1.6 * u, 12.8 * u)], fill=navy)
+    d.rectangle([cx - 1.7 * u, 11.6 * u, cx + 1.9 * u, 12.4 * u], fill=(14, 14, 16))                   # cinturón
+    d.rectangle([cx + .5 * u, 6.0 * u, cx + 1.2 * u, 6.8 * u], fill=(230, 190, 70))                     # placa
+    # libreta en la mano izquierda, a la altura del pecho
+    px0, py0 = cx + 2.0 * u, 6.6 * u
+    d.line([(cx + .2 * u, 5.2 * u), (cx + 1.0 * u, 8.6 * u), (px0 + .4 * u, py0 + 2.2 * u)], fill=navy_d, width=max(2, int(1.3 * u)))
+    d.rectangle([px0, py0, px0 + 2.0 * u, py0 + 2.4 * u], fill=(236, 236, 226))
+    d.line([(px0 + .1 * u, py0 + .2 * u), (px0 + 1.9 * u, py0 + .2 * u)], fill=(200, 60, 60), width=1)
+    for j in range(min(k + 1, 3)):                                      # renglones que se van escribiendo
+        d.line([(px0 + .3 * u, py0 + (.8 + j * .5) * u), (px0 + (1.1 + .25 * ((j + k) % 3)) * u, py0 + (.8 + j * .5) * u)],
+               fill=(60, 70, 90), width=1)
+    # mano derecha con la birome, se mueve sobre la libreta
+    hx_, hy_ = px0 + [0.5, 1.2, 0.8, 1.5][k] * u, py0 + [1.0, 1.1, 1.6, 1.4][k] * u
+    d.line([(cx + .6 * u, 5.0 * u), (cx + 1.6 * u, 8.0 * u), (hx_, hy_ + .4 * u)], fill=navy, width=max(2, int(1.3 * u)))
+    d.ellipse([hx_ - .5 * u, hy_, hx_ + .5 * u, hy_ + .9 * u], fill=skin)
+    d.line([(hx_, hy_), (hx_ + .5 * u, hy_ - .9 * u)], fill=(30, 30, 40), width=1)                     # birome
+    # cabeza mirando la libreta
+    hx, hy = cx + .7 * u, 2.5 * u
+    d.rectangle([cx - .1 * u, 3.5 * u, cx + .9 * u, 4.7 * u], fill=skin)
+    d.ellipse([hx - 1.5 * u, hy - 1.8 * u, hx + 1.5 * u, hy + 1.7 * u], fill=skin)
+    d.rectangle([hx - 1.7 * u, hy - 2.4 * u, hx + 1.6 * u, hy - 1.0 * u], fill=(26, 34, 64))
+    d.rectangle([hx - 1.7 * u, hy - 1.3 * u, hx + 1.6 * u, hy - 1.0 * u], fill=(10, 10, 12))
+    d.rectangle([hx + 1.2 * u, hy - 1.1 * u, hx + 2.6 * u, hy - .7 * u], fill=(10, 10, 12))            # visera
+    d.rectangle([hx + .4 * u, hy - 2.1 * u, hx + 1.0 * u, hy - 1.5 * u], fill=(220, 180, 60))
+    d.rectangle([hx - 1.4 * u, hy - 1.0 * u, hx - .4 * u, hy + .4 * u], fill=(40, 30, 24))
+    d.point((hx + .9 * u, hy + .2 * u), fill=(30, 24, 20))                                             # mirada baja
+    return im
+
+
+def no_parking_sign(h):
+    """Cartel argentino de prohibido estacionar: círculo rojo con la E tachada, sobre un poste."""
+    S = 4
+    w = int(h * .32)
+    big = Image.new("RGBA", (w * S, (h + 1) * S), (0, 0, 0, 0)); d = ImageDraw.Draw(big)
+    cxs, r = w * S / 2, w * S * .46
+    d.rectangle([cxs - S * .6, r * 1.6, cxs + S * .6, (h + 1) * S], fill=(70, 76, 74))                  # poste
+    cy_ = r + S
+    d.ellipse([cxs - r, cy_ - r, cxs + r, cy_ + r], fill=(206, 30, 40))
+    d.ellipse([cxs - r * .76, cy_ - r * .76, cxs + r * .76, cy_ + r * .76], fill=(244, 244, 238))
+    ex, ey, eh = cxs - r * .28, cy_ - r * .42, r * .84                                                   # la E
+    d.rectangle([ex, ey, ex + r * .14, ey + eh], fill=(20, 20, 20))
+    for yy_e in (0, .43, .86):
+        d.rectangle([ex, ey + eh * yy_e - r * .02, ex + r * .5, ey + eh * yy_e + r * .12], fill=(20, 20, 20))
+    d.line([(cxs - r * .54, cy_ - r * .54), (cxs + r * .54, cy_ + r * .54)], fill=(206, 30, 40), width=int(r * .2))
+    return _finish(big, w, h + 1)
+
+
+PCL, VCL = 80, 76                                        # largo del patrullero y del infractor
+PCX = GX + GW + 8                                        # pasada la esquina (cruza la costura del tile)
 PBASE = GROUND                                           # ruedas contra el cordón
 pcar = vehicle_side(PCL, (26, 28, 32), "police").transpose(Image.FLIP_LEFT_RIGHT)   # mira a la derecha
-car_h = PCL * .31                                        # alto de carrocería (sin barral)
-officer = officer_leg_up(round(car_h * 1.75 / 1.45)).transpose(Image.FLIP_LEFT_RIGHT)  # mira al auto
+car_h = PCL * .31
+OH = round(car_h * 1.75 / 1.45)                          # alto del oficial a escala del auto
+ofr = [officer_writing(OH, k) for k in range(4)]
 p_y = PBASE - pcar.height + 2
-o_x = PCX + PCL - int(officer.width * .34)               # su pie cae sobre el paragolpe delantero
-o_y = PBASE - officer.height + 1
+o_x = PCX + PCL + 1                                      # entre el frente del patrullero y el infractor
+o_y = PBASE - OH
+foot_x = o_x + int(ofr[0].width * .38 + 4.6 * OH / 24 + 1.6 * OH / 24)
+VCX = foot_x - 1                                         # paragolpe trasero del infractor bajo su pie
+vcar = vehicle_side(VCL, (122, 34, 40), "sedan").transpose(Image.FLIP_LEFT_RIGHT)
+v_y = PBASE - vcar.height + 2
+sign = no_parking_sign(40)
+SX, SY = VCX + VCL - 16, GROUND + 4 - sign.height        # en la vereda, junto al cordón, frente al infractor
 _hh = PCL * .31 * VS
 _tp = int(_hh * .14)
 bar_y0, bar_y1 = p_y + (_tp - _hh * .1) / VS, p_y + (_tp + _hh * .03) / VS
@@ -1072,6 +1143,10 @@ defs.append('<radialGradient id="sirR"><stop offset="0" stop-color="#ff3040" sto
             '<stop offset="1" stop-color="#3a70ff" stop-opacity="0"/></radialGradient>')
 css.append("@keyframes sirR{0%,8%{opacity:1}9%,16%{opacity:0}17%,25%{opacity:1}26%,100%{opacity:0}}"
            "@keyframes sirB{0%,49%{opacity:0}50%,58%{opacity:1}59%,66%{opacity:0}67%,75%{opacity:1}76%,100%{opacity:0}}")
+for k in range(4):                                       # escritura: 4 cuadros que se alternan
+    a_, b_ = k * 25, (k + 1) * 25
+    css.append(f"@keyframes wr{k}{{0%,100%{{opacity:0}}{a_}%,{b_ - .01}%{{opacity:1}}{b_}%{{opacity:0}}}}"
+               if k else "@keyframes wr0{0%,24.99%{opacity:1}25%,100%{opacity:0}}")
 bh_ = bar_y1 - bar_y0
 siren = (f'<g style="animation:sirB .9s infinite steps(1)">'
          f'<ellipse cx="{(bar_xb + bar_xm) / 2:.1f}" cy="{bar_y0 + bh_ / 2:.1f}" rx="15" ry="9" fill="url(#sirB)"/>'
@@ -1079,9 +1154,13 @@ siren = (f'<g style="animation:sirB .9s infinite steps(1)">'
          f'<g style="animation:sirR .9s infinite steps(1)">'
          f'<ellipse cx="{(bar_xm + bar_xr) / 2:.1f}" cy="{bar_y0 + bh_ / 2:.1f}" rx="15" ry="9" fill="url(#sirR)"/>'
          f'<rect x="{bar_xm:.1f}" y="{bar_y0:.1f}" width="{bar_xr - bar_xm:.1f}" height="{bh_:.1f}" fill="#ffd0d4"/></g>')
-patrol = (f'<g style="{WALK_VIS}">{image(pcar, PCX, p_y, up=1)}{image(officer, o_x, o_y, up=1)}{siren}</g>'
-          f'<g opacity="0" style="{FRZ_VIS}">{image(frozen(pcar), PCX, p_y, up=1)}{image(frozen(officer), o_x, o_y, up=1)}</g>')
-patrol += f'<g transform="translate({-W} 0)">{patrol}</g>'
+writing = "".join(f'<g opacity="{1 if k == 0 else 0}" style="animation:wr{k} 1.6s infinite steps(1)">'
+                  f'{image(ofr[k], o_x, o_y, up=1)}</g>' for k in range(4))
+scene = (f'<g style="{WALK_VIS}">{image(pcar, PCX, p_y, up=1)}{image(vcar, VCX, v_y, up=1)}{writing}{siren}'
+         f'{image(sign, SX, SY, up=1)}</g>'
+         f'<g opacity="0" style="{FRZ_VIS}">{image(frozen(pcar), PCX, p_y, up=1)}{image(frozen(vcar), VCX, v_y, up=1)}'
+         f'{image(frozen(ofr[0]), o_x, o_y, up=1)}{image(frozen(sign), SX, SY, up=1)}</g>')
+patrol = "".join(f'<g transform="translate({off} 0)">{scene}</g>' for off in (0, -W, -2 * W))
 body.append(f'<g style="{track(TILE0, NEAR_SPEED, W, 0, 0)}">{patrol}</g>')
 
 # ============================================================ multitud (fila de atrás)
