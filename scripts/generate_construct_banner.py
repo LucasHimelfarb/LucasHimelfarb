@@ -999,7 +999,7 @@ for px in (372, 468, 566):                                              # postes
 
 
 # ---------- vegetación
-def street_tree(height, seed, young=True):
+def street_tree(height, seed, young=True, parts=False):
     """Plátano de sombra de vereda neoyorquina: tronco grueso de corteza manchada, ramas altas y copa
     ovalada, más alta que ancha y densa (dibujado a 4x)."""
     S4 = 4
@@ -1024,26 +1024,55 @@ def street_tree(height, seed, young=True):
     for a_ in (-.55, -.2, .15, .5):                          # ramas altas
         ex, ey = cx_t + lean_ + np.sin(a_) * .2 * Hh, trunk_top - np.cos(a_) * .2 * Hh
         limb(d, (cx_t + lean_, trunk_top + .02 * Hh), (ex, ey), .045 * Hh, .02 * Hh, (88, 80, 68))
-    greens = [(40, 74, 42), (54, 92, 50), (70, 112, 58), (88, 132, 66), (110, 150, 78)]
+    greens = [(34, 62, 38), (46, 82, 46), (60, 102, 54), (78, 124, 62), (100, 146, 74), (128, 170, 90)]
     ccx, ccy = cx_t + lean_, trunk_top - .2 * Hh               # copa ovalada (alta)
     RX, RY = .22 * Hh, .3 * Hh
-    for _ in range(110):
+    crown = Image.new("RGBA", im.size, (0, 0, 0, 0)); dc = ImageDraw.Draw(crown)
+    leaf = .016 * Hh                                          # tamaño de una hoja
+
+    def clump(x0, y0, rad, lvl):
+        """Racimo de hojas: varias hojas chicas, sombra abajo a la derecha y luz arriba a la izquierda."""
+        n_ = int(6 + rad / leaf * 2)
+        for _ in range(n_):
+            a2 = rt.uniform(0, 2 * np.pi); r2 = rt.uniform(0, 1) ** .7 * rad
+            lx2, ly2 = x0 + np.cos(a2) * r2, y0 + np.sin(a2) * r2 * .85
+            lit = -(np.cos(a2) + np.sin(a2)) * r2 / max(rad, 1e-6)          # + hacia arriba-izquierda
+            k_ = int(np.clip(lvl * 4 + lit * 1.6 + rt.uniform(-.6, .6), 0, 5))
+            lw_, lh_ = leaf * rt.uniform(.9, 1.4), leaf * rt.uniform(.6, .9)
+            dc.ellipse([lx2 - lw_, ly2 - lh_, lx2 + lw_, ly2 + lh_], fill=greens[k_])
+
+    # capa de fondo oscura (masa de la copa) y racimos encima, de atrás hacia adelante
+    dc.ellipse([ccx - RX * .92, ccy - RY * .92, ccx + RX * .92, ccy + RY * .92], fill=greens[0])
+    pts_ = []
+    for _ in range(70):
+        ang = rt.uniform(0, 2 * np.pi); rr = rt.uniform(0, 1) ** .6
+        pts_.append((ccx + np.cos(ang) * rr * RX, ccy + np.sin(ang) * rr * RY))
+    pts_.sort(key=lambda q: q[1])
+    for lx_, ly_ in pts_:
+        lvl = (ccy + RY - ly_) / (2 * RY)
+        clump(lx_, ly_, rt.uniform(.035, .06) * Hh, lvl)
+    for _ in range(40):                                       # hojas sueltas en el borde: rompen la silueta
         ang = rt.uniform(0, 2 * np.pi)
-        rr = rt.uniform(0, 1) ** .55
-        lx_, ly_ = ccx + np.cos(ang) * rr * RX, ccy + np.sin(ang) * rr * RY
-        r_ = rt.uniform(.03, .055) * Hh
-        lvl = (ccy + RY - ly_) / (2 * RY)                    # 0 abajo .. 1 arriba: más luz arriba
-        g_ = greens[int(np.clip(lvl * 4 + rt.uniform(-1.2, .8), 0, 4))]
-        d.ellipse([lx_ - r_, ly_ - r_, lx_ + r_, ly_ + r_], fill=g_)
-    for _ in range(18):                                      # luz en el borde superior izquierdo
-        ang = rt.uniform(np.pi * 1.05, np.pi * 1.6)
-        lx_, ly_ = ccx + np.cos(ang) * RX * .8, ccy + np.sin(ang) * RY * .8
-        r_ = rt.uniform(.015, .028) * Hh
-        d.ellipse([lx_ - r_, ly_ - r_, lx_ + r_, ly_ + r_], fill=(146, 184, 100))
-    for _ in range(10):                                      # huecos de sombra dentro de la copa
-        lx_, ly_ = ccx + rt.uniform(-.6, .6) * RX, ccy + rt.uniform(-.2, .7) * RY
-        r_ = rt.uniform(.012, .022) * Hh
-        d.ellipse([lx_ - r_, ly_ - r_, lx_ + r_, ly_ + r_], fill=(30, 56, 34))
+        lx_, ly_ = ccx + np.cos(ang) * RX * rt.uniform(.95, 1.12), ccy + np.sin(ang) * RY * rt.uniform(.95, 1.1)
+        lvl = (ccy + RY - ly_) / (2 * RY)
+        k_ = int(np.clip(lvl * 4 - .5 + rt.uniform(-.8, .8), 0, 5))
+        dc.ellipse([lx_ - leaf, ly_ - leaf * .7, lx_ + leaf, ly_ + leaf * .7], fill=greens[k_])
+    for _ in range(12):                                       # huecos: se ven ramitas y el cielo de atrás
+        lx_, ly_ = ccx + rt.uniform(-.55, .55) * RX, ccy + rt.uniform(-.3, .6) * RY
+        r_ = rt.uniform(.012, .02) * Hh
+        dc.ellipse([lx_ - r_, ly_ - r_, lx_ + r_, ly_ + r_], fill=(28, 46, 32))
+        dc.line([(lx_ - r_, ly_ + r_ * .5), (lx_ + r_, ly_ - r_ * .3)], fill=(84, 74, 62), width=max(1, int(.006 * Hh)))
+    if parts:
+        flick = Image.new("RGBA", im.size, (0, 0, 0, 0)); df = ImageDraw.Draw(flick)
+        flick2 = Image.new("RGBA", im.size, (0, 0, 0, 0)); df2 = ImageDraw.Draw(flick2)
+        for dd in (df, df2):                                  # hojas que se dan vuelta con la brisa
+            for _ in range(22):
+                ang = rt.uniform(np.pi * .9, np.pi * 2.1); rr = rt.uniform(.3, 1)
+                lx_, ly_ = ccx + np.cos(ang) * rr * RX, ccy + np.sin(ang) * rr * RY
+                dd.ellipse([lx_ - leaf, ly_ - leaf * .6, lx_ + leaf, ly_ + leaf * .6], fill=(170, 200, 120))
+        f_ = lambda x_: _finish(x_, int(w_ / S4), int(im.height / S4))
+        return f_(im), f_(crown), f_(flick), f_(flick2), (ccx / S4, trunk_top / S4)
+    im.alpha_composite(crown)
     return _finish(im, int(w_ / S4), int(im.height / S4))
 
 
@@ -1962,10 +1991,21 @@ body.append(f'<g style="{track(TILE0, NEAR_SPEED, TW, 0, 0)}">{dump_svg}</g>')
 
 # ============================================================ árboles de nuestra vereda (capa propia)
 OUR_TREE_H = 92                                              # ~5 m junto al cordón (la copa sale del cuadro)
+css.append("@keyframes sway{0%,100%{transform:rotate(-1.1deg)}50%{transform:rotate(1.3deg)}}"
+           "@keyframes rustle{0%,100%{transform:translate(0,0)}33%{transform:translate(.6px,-.3px)}66%{transform:translate(-.4px,.2px)}}"
+           "@keyframes flA{0%,49.9%{opacity:1}50%,100%{opacity:0}}@keyframes flB{0%,49.9%{opacity:0}50%,100%{opacity:1}}")
 trees_svg = ""
 for i_, tx_ in enumerate(OUR_TREES):
-    t_im = street_tree(OUR_TREE_H, 90 + i_)
-    trees_svg += image(t_im, tx_ - t_im.width / 2, GROUND + 5 - t_im.height, up=1)
+    trunk_i, crown_i, fl1, fl2, (px_c, py_c) = street_tree(OUR_TREE_H, 90 + i_, parts=True)
+    x0_t, y0_t = tx_ - trunk_i.width / 2, GROUND + 5 - trunk_i.height
+    ox_, oy_ = x0_t + px_c, y0_t + py_c                     # pivote: punta del tronco
+    sw_d, sw_dl = 4.2 + i_ * .7, -i_ * 1.3
+    trees_svg += (image(trunk_i, x0_t, y0_t, up=1) +
+                  f'<g style="transform-origin:{ox_:.1f}px {oy_:.1f}px;animation:sway {sw_d:.1f}s {sw_dl:.1f}s infinite ease-in-out">'
+                  f'<g style="animation:rustle {1.7 + i_ * .3:.1f}s infinite ease-in-out">{image(crown_i, x0_t, y0_t, up=1)}'
+                  f'<g style="animation:flA {1.1 + i_ * .2:.1f}s infinite steps(1)">{image(fl1, x0_t, y0_t, up=1)}</g>'
+                  f'<g style="animation:flB {1.1 + i_ * .2:.1f}s infinite steps(1)">{image(fl2, x0_t, y0_t, up=1)}</g>'
+                  f'</g></g>')
 trees_svg = "".join(f'<g transform="translate({off} 0)">{trees_svg}</g>' for off in (0, -TW, TW))
 body.append(f'<g style="{track(TILE0, NEAR_SPEED, TW, 0, 0)}">{trees_svg}</g>')
 
