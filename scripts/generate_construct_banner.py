@@ -612,23 +612,52 @@ def figure(h, frame, look, pose="walk"):
     hip, foot = 12.5 * u, h - 1
     stride = {"walk": [2.4, 0.4][frame], "idle": 0.6}[pose] * u
     # piernas
+    fem = look.get("female")
+    lw = .75 if fem else 1.0                                            # ancho de pierna
     for sgn, shade in ((1, .8), (-1, 1.0)):                             # pierna de atrás primero
         col = tuple(int(c * shade) for c in pants)
         fx = cx - sgn * stride
-        d.polygon([(cx - 1.1 * u, hip), (cx + 1.1 * u, hip), (fx + 1 * u, foot - u), (fx - 1 * u, foot - u)], fill=col)
-        d.rectangle([fx - 1.6 * u, foot - u, fx + 0.8 * u, foot], fill=shoe)
+        d.polygon([(cx - 1.1 * u, hip), (cx + 1.1 * u, hip), (fx + lw * u, foot - u), (fx - lw * u, foot - u)], fill=col)
+        if look.get("heels"):
+            d.polygon([(fx - 1.3 * u, foot - .4 * u), (fx + .3 * u, foot - 1.1 * u), (fx + .5 * u, foot - .3 * u),
+                       (fx - 1.3 * u, foot)], fill=shoe)
+        else:
+            d.rectangle([fx - 1.6 * u, foot - u, fx + 0.8 * u, foot], fill=shoe)
+            if look.get("sole"):
+                d.rectangle([fx - 1.6 * u, foot - .35 * u, fx + 0.8 * u, foot], fill=look["sole"])
     # torso / abrigo
     coat_len = look.get("coat_len", 13.5) * u
-    d.polygon([(cx - 1.9 * u, 4.2 * u), (cx + 1.6 * u, 4.2 * u), (cx + 2.2 * u + (stride * .3 if coat_len > 14 * u else 0), coat_len),
-               (cx - 2.4 * u - (stride * .5 if coat_len > 14 * u else 0), coat_len)], fill=coat)
+    if look.get("backpack"):
+        d.rounded_rectangle([cx + 1.1 * u, 4.8 * u, cx + 2.9 * u, 10.4 * u], radius=max(1, int(.6 * u)), fill=look["backpack"])
+    long_coat = coat_len > 14 * u
+    if fem:
+        d.polygon([(cx - 1.5 * u, 4.3 * u), (cx + 1.3 * u, 4.3 * u), (cx + 1.0 * u, 8.4 * u),
+                   (cx + 1.8 * u + (stride * .3 if long_coat else 0), max(11 * u, coat_len)),
+                   (cx - 1.7 * u - (stride * .4 if long_coat else 0), max(11 * u, coat_len)),
+                   (cx - 1.1 * u, 8.4 * u), (cx - 1.8 * u, 6.2 * u)], fill=coat)
+        if coat_len < 11 * u:                                              # top corto: cadera del pantalón
+            d.polygon([(cx - 1.1 * u, coat_len), (cx + 1.0 * u, coat_len), (cx + 1.6 * u, hip), (cx - 1.6 * u, hip)], fill=pants)
+    else:
+        d.polygon([(cx - 1.9 * u, 4.2 * u), (cx + 1.6 * u, 4.2 * u), (cx + 2.2 * u + (stride * .3 if long_coat else 0), coat_len),
+                   (cx - 2.4 * u - (stride * .5 if long_coat else 0), coat_len)], fill=coat)
+    if look.get("backpack"):
+        d.line([(cx - .9 * u, 4.6 * u), (cx - .3 * u, 8.5 * u)], fill=tuple(int(c * .7) for c in look["backpack"]), width=1)
     d.polygon([(cx - 1.9 * u, 4.4 * u), (cx - 0.9 * u, 4.4 * u), (cx - 1.4 * u, 7.5 * u)], fill=shirt)   # cuello
     if look.get("tie"):
         d.line([(cx - 1.5 * u, 5 * u), (cx - 1.7 * u, 8 * u)], fill=look["tie"], width=max(1, int(u * .6)))
     # brazo (balanceo opuesto a la pierna delantera)
     swing = {"walk": [-1.6, -0.2][frame], "idle": -0.2}[pose] * u
     arm = tuple(int(c * .85) for c in coat)
-    d.line([(cx, 5 * u), (cx + swing, 10.8 * u)], fill=arm, width=max(2, int(1.5 * u)))
+    aw_ = max(2, int((1.15 if fem else 1.5) * u))
+    if look.get("short_sleeves"):
+        d.line([(cx, 5 * u), (cx + swing, 10.8 * u)], fill=skin, width=aw_)
+        d.line([(cx, 5 * u), (cx + swing * .35, 7.2 * u)], fill=arm, width=aw_ + 1)
+    else:
+        d.line([(cx, 5 * u), (cx + swing, 10.8 * u)], fill=arm, width=aw_)
     d.ellipse([cx + swing - .7 * u, 10.6 * u, cx + swing + .7 * u, 11.8 * u], fill=skin)
+    if look.get("bag"):
+        d.line([(cx + swing, 10.9 * u), (cx + swing, 12 * u)], fill=tuple(int(c * .6) for c in look["bag"]), width=1)
+        d.rectangle([cx + swing - 1.0 * u, 12 * u, cx + swing + 1.0 * u, 14.2 * u], fill=look["bag"])
     # cabeza
     hx, hy = cx - .3 * u, 2.2 * u
     d.rectangle([cx - .7 * u, 3.4 * u, cx + .3 * u, 4.4 * u], fill=skin)                                  # cuello
@@ -638,6 +667,15 @@ def figure(h, frame, look, pose="walk"):
     if look.get("curly"):
         for ox, oy in ((-1.4, -1.9), (-.4, -2.4), (.6, -2.2), (1.5, -1.5), (1.8, -.4)):
             d.ellipse([hx + (ox - .6) * u, hy + (oy - .5) * u, hx + (ox + .6) * u, hy + (oy + .5) * u], fill=hair)
+    if look.get("ponytail"):
+        sw_ = (.3 if frame == 0 else -.2) * u
+        d.polygon([(hx + 1.0 * u, hy - 1.4 * u), (hx + 1.8 * u, hy - 1.1 * u), (hx + 2.4 * u + sw_, hy + 2.6 * u),
+                   (hx + 1.7 * u + sw_, hy + 2.8 * u)], fill=hair)
+    if look.get("bun"):
+        d.ellipse([hx + .9 * u, hy - 2.1 * u, hx + 2.3 * u, hy - .7 * u], fill=hair)
+    if look.get("ballcap"):
+        d.chord([hx - 1.6 * u, hy - 2.3 * u, hx + 1.7 * u, hy + .4 * u], 180, 360, fill=look["ballcap"])
+        d.rectangle([hx - 2.7 * u, hy - 1.05 * u, hx - .6 * u, hy - .6 * u], fill=tuple(int(c * .7) for c in look["ballcap"]))
     if look.get("shades"):
         d.rectangle([hx - 1.6 * u, hy - .5 * u, hx - .2 * u, hy + .2 * u], fill=look["shades"])
         d.line([(hx - .2 * u, hy - .4 * u), (hx + 1.2 * u, hy - .5 * u)], fill=look.get("frame", (20, 20, 20)), width=1)
@@ -645,8 +683,11 @@ def figure(h, frame, look, pose="walk"):
         d.rectangle([hx - 1.3 * u, hy + .6 * u, hx + .4 * u, hy + 1.5 * u], fill=look["beard"])
     if look.get("skirt"):
         sl = look.get("skirt_len", 16) * u
-        d.polygon([(cx - 2 * u, 9 * u), (cx + 1.8 * u, 9 * u), (cx + 2.8 * u + stride * .2, sl), (cx - 3 * u - stride * .3, sl)],
-                  fill=look["skirt"])
+        if look.get("pencil"):
+            d.polygon([(cx - 1.6 * u, 9.6 * u), (cx + 1.7 * u, 9.6 * u), (cx + 1.5 * u, sl), (cx - 1.4 * u, sl)], fill=look["skirt"])
+        else:
+            d.polygon([(cx - 2 * u, 9 * u), (cx + 1.8 * u, 9 * u), (cx + 2.8 * u + stride * .2, sl), (cx - 3 * u - stride * .3, sl)],
+                      fill=look["skirt"])
     if look.get("long_hair"):                                          # pelo largo cayendo por la espalda
         d.polygon([(hx - .2 * u, hy - 1.6 * u), (hx + 1.8 * u, hy - 1.2 * u), (hx + 2.2 * u, hy + 3.6 * u),
                    (hx + .4 * u, hy + 3.2 * u)], fill=hair)
@@ -655,7 +696,8 @@ def figure(h, frame, look, pose="walk"):
         d.rectangle([hx - 1.6 * u, hy - 2.4 * u, hx + 1.8 * u, hy - 1.0 * u], fill=look["cap"])
         d.rectangle([hx - 1.6 * u, hy - 1.3 * u, hx + 1.8 * u, hy - 1.0 * u], fill=(10, 10, 12))
         d.rectangle([hx - 2.6 * u, hy - 1.2 * u, hx - 1.2 * u, hy - .8 * u], fill=(10, 10, 12))
-        d.rectangle([hx - 1.0 * u, hy - 2.1 * u, hx - .4 * u, hy - 1.5 * u], fill=(220, 180, 60))
+        if look.get("badge"):
+            d.rectangle([hx - 1.0 * u, hy - 2.1 * u, hx - .4 * u, hy - 1.5 * u], fill=(220, 180, 60))
     if look.get("badge"):
         d.rectangle([cx - 1.3 * u, 6 * u, cx - .6 * u, 6.8 * u], fill=look["badge"])
     if look.get("belt"):
@@ -847,18 +889,51 @@ for ly, dirn, k, vehs in LANES:
                f'<g opacity="0" style="{FRZ_VIS}">{image(frozen(im), 0, -im.height + 2, up=1)}</g>')
         body.append(f'<g style="{track(x0, v, CSPAN, CMARG, ly)}">{spr}</g>')
 
+# ============================================================ arquetipos de la multitud
+DENIM = [(54, 70, 104), (70, 86, 118), (40, 48, 70)]
+TEE = [(196, 60, 52), (214, 170, 70), (60, 120, 118), (226, 226, 218), (90, 110, 150), (130, 70, 110)]
+SNEAK = [(226, 226, 220), (40, 40, 44), (190, 60, 50)]
+
+
+def crowd_look(kind, rng):
+    base = dict(skin=rng.choice(SKIN), hair=rng.choice(HAIR))
+    if kind == "m_suit":        # hombre de traje
+        return dict(base, coat=rng.choice(SUIT), shirt=rng.choice([(200, 206, 196), (220, 220, 210)]),
+                    tie=rng.choice([(40, 60, 50), (90, 40, 40), (30, 30, 60)]), coat_len=13.5)
+    if kind == "m_casual":      # remera, jean, zapatillas; a veces gorra y mochila
+        tee = rng.choice(TEE)
+        return dict(base, coat=tee, shirt=tee, pants=rng.choice(DENIM), shoe=rng.choice(SNEAK), sole=(236, 236, 230),
+                    short_sleeves=True, coat_len=12.2, ballcap=rng.choice([None, (40, 60, 100), (150, 40, 40)]),
+                    backpack=rng.choice([None, (60, 66, 70), (120, 90, 50)]))
+    if kind == "m_jacket":      # campera, chino, barba
+        return dict(base, coat=rng.choice([(90, 96, 60), (70, 48, 34), (40, 40, 44), (120, 96, 70)]),
+                    shirt=rng.choice(TEE), pants=rng.choice([(150, 132, 96), (60, 62, 58), (48, 56, 76)]),
+                    shoe=(70, 50, 36), coat_len=12.0, beard=rng.choice([None, base["hair"]]))
+    if kind == "f_suit":        # mujer de saco y pollera tubo, rodete, tacos
+        c = rng.choice(SUIT + [(110, 40, 50), (40, 50, 80)])
+        return dict(base, female=True, coat=c, skirt=c, pencil=True, skirt_len=15.6, pants=(196, 160, 136),
+                    shoe=(20, 20, 22), heels=True, bun=True, coat_len=10.4, shirt=(226, 226, 220),
+                    hair=rng.choice(HAIR[:3] + [(190, 150, 80)]))
+    if kind == "f_casual":      # suéter, jean, colita, tote
+        return dict(base, female=True, coat=rng.choice(TEE + [(200, 180, 160)]), shirt=(226, 226, 220),
+                    pants=rng.choice(DENIM), shoe=rng.choice(SNEAK), sole=(236, 236, 230), coat_len=10.0,
+                    ponytail=True, long_hair=False, bag=rng.choice([(196, 170, 120), (60, 50, 44), (150, 60, 50)]),
+                    hair=rng.choice(HAIR[:3] + [(190, 150, 80), (150, 60, 40)]))
+    # f_coat: piloto beige a la rodilla, pelo largo, medias y botas
+    return dict(base, female=True, coat=rng.choice([(176, 150, 110), (120, 110, 100), (60, 64, 70)]),
+                shirt=(226, 220, 210), pants=(36, 32, 34), shoe=(40, 28, 24), coat_len=15.8, long_hair=True,
+                belt=rng.choice([None, (120, 96, 66)]), hair=rng.choice(HAIR[:3] + [(190, 150, 80), (150, 60, 40)]))
+
+
+KINDS = ["m_suit", "f_casual", "m_casual", "f_suit", "m_jacket", "f_coat"]
+
 # ============================================================ multitud (fila de atrás)
 SPAN, MARGIN = W + 60, 30
 crowd_back = []
 for i in range(11):
-    h = random.randint(34, 40)
-    look = dict(coat=random.choice(SUIT), skin=random.choice(SKIN), hair=random.choice(HAIR),
-                shirt=random.choice([(200, 206, 196), (170, 190, 176), (220, 220, 210)]),
-                tie=random.choice([None, (40, 60, 50), (90, 40, 40), (30, 30, 60)]))
-    if random.random() < .3:
-        look["skirt"] = tuple(int(c * 1.05) for c in look["coat"])
-    if random.random() < .25:
-        look["coat_len"] = 16
+    kind = KINDS[i % len(KINDS)]
+    look = crowd_look(kind, random)
+    h = random.randint(33, 37) if look.get("female") else random.randint(36, 40)
     k = random.choice([-1, 1, 1, 2, 2, 3])
     v = k * SPAN / WALK
     flip = k > 0                                   # los que van a la derecha miran a la derecha
@@ -988,7 +1063,9 @@ body.append(f'<g style="transform:translate(-50px,{CPY}px);animation:{kc} {T}s i
 # ============================================================ multitud (fila de adelante, fuera de foco)
 for i in range(2):
     h = random.randint(86, 96)
-    look = dict(coat=(24, 30, 28), skin=(40, 46, 42), hair=(16, 20, 18), shirt=(34, 40, 36), shoe=(14, 16, 14))
+    look = crowd_look(["m_casual", "f_coat"][i], random)
+    dark = lambda c: tuple(int(16 + v * .12) for v in c) if c else c
+    look = {k_: (dark(v_) if isinstance(v_, tuple) else v_) for k_, v_ in look.items()}
     fr = [figure(h, 0, look), figure(h, 1, look)]
     s = sprite_group(fr, 0, -h, step=.4, freeze_img=frozen(fr[0]), flip=True)
     FS = W + 420                                   # tramo largo: pasan de vez en cuando
