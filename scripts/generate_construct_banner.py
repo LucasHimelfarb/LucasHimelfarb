@@ -246,6 +246,68 @@ while x < W:
             near[sy - 4 + i, x + 2 - i // 2:x + bw - 2 + i // 2, :3] = aw + (i % 2) * 18
             near[sy - 4 + i, x + 2 - i // 2:x + bw - 2 + i // 2, 3] = 255
     x += bw
+# esquina: hueco en la fachada con la calle transversal en perspectiva
+GX, GW, VY = 168, 92, 58                                               # hueco y punto de fuga
+GC = GX + GW / 2
+near[:GROUND, GX:GX + GW, 3] = 0
+road_r = lambda y: 7 + (GW / 2 - 4 - 7) * (y - VY) / (GROUND - VY)    # semiancho de la calzada
+side_r = lambda y: road_r(y) + 2 + (GROUND - y) * .06
+cv = Image.new("RGBA", (W, H), (0, 0, 0, 0)); cd = ImageDraw.Draw(cv)
+for sg in (-1, 1):                                                     # paredes laterales de la calle
+    edge = GC + sg * GW / 2
+    cd.polygon([(edge, 24), (edge, GROUND), (GC + sg * side_r(VY), VY), (GC + sg * side_r(VY), VY - 20)],
+               fill=(66, 78, 70, 255) if sg < 0 else (88, 100, 88, 255))
+    for k in range(1, 6):                                              # pisos en fuga
+        t = k / 6
+        cd.line([(edge, 24 + (GROUND - 24) * t), (GC + sg * side_r(VY), VY - 20 + 20 * t)],
+                fill=(52, 62, 56, 255) if sg < 0 else (74, 86, 76, 255))
+    cd.polygon([(GC + sg * road_r(GROUND), GROUND), (GC + sg * side_r(GROUND), GROUND),
+                (GC + sg * side_r(VY), VY), (GC + sg * road_r(VY), VY)], fill=(150, 158, 140, 255))   # veredas
+cd.polygon([(GC - road_r(GROUND), GROUND), (GC + road_r(GROUND), GROUND), (GC + road_r(VY), VY), (GC - road_r(VY), VY)],
+           fill=(62, 68, 66, 255))                                     # calzada
+cd.rectangle([GC - side_r(VY) - 2, VY - 26, GC + side_r(VY) + 2, VY], fill=(120, 136, 120, 255))  # edificio al fondo
+for wy in range(VY - 23, VY - 2, 4):
+    for wx in range(int(GC - side_r(VY)), int(GC + side_r(VY)), 3):
+        cd.point((wx, wy), fill=(80, 96, 86, 255))
+y = GROUND - 2
+while y > VY + 1:                                                      # línea central punteada
+    ln = max(1, (y - VY) / 8)
+    cd.line([(GC, y), (GC, y - ln)], fill=(200, 196, 150, 255))
+    y -= ln * 2.2
+cd.line([(GC - road_r(89), 89), (GC - 1, 89)], fill=(210, 214, 200, 255))  # línea de frenado
+# semáforo en la esquina (rojo para los autos: cruzan peatones)
+sx_ = GX + GW - 3
+cd.rectangle([sx_, 44, sx_ + 1, GROUND], fill=(30, 36, 32, 255))
+cd.rectangle([sx_ - 2, 36, sx_ + 3, 46], fill=(24, 28, 26, 255))
+cd.rectangle([sx_ - 1, 37, sx_ + 2, 39], fill=(255, 60, 60, 255))
+cd.rectangle([sx_ - 1, 40, sx_ + 2, 42], fill=(60, 50, 30, 255))
+cd.rectangle([sx_ - 1, 43, sx_ + 2, 45], fill=(30, 60, 40, 255))
+
+
+def car_front(w, body):
+    """Auto de frente (esperando en el semáforo)."""
+    h = int(w * .55)
+    im = Image.new("RGBA", (w, h), (0, 0, 0, 0)); d = ImageDraw.Draw(im)
+    d.rectangle([w * .18, 0, w * .82, h * .42], fill=tuple(int(c * .8) for c in body))           # techo
+    d.rectangle([w * .24, h * .08, w * .76, h * .4], fill=(120, 150, 150))                         # parabrisas
+    d.line([(w * .3, h * .1), (w * .45, h * .36)], fill=(190, 210, 200))
+    d.rectangle([0, h * .42, w - 1, h * .86], fill=body)
+    d.rectangle([w * .06, h * .5, w * .2, h * .64], fill=(250, 240, 190))                          # faros
+    d.rectangle([w * .8, h * .5, w * .94, h * .64], fill=(250, 240, 190))
+    d.rectangle([w * .3, h * .56, w * .7, h * .74], fill=(30, 34, 32))                             # parrilla
+    d.rectangle([w * .04, h * .86, w * .2, h - 1], fill=(14, 14, 14))
+    d.rectangle([w * .8, h * .86, w * .96, h - 1], fill=(14, 14, 14))
+    return im
+
+
+for wy_, sc in ((83, .62), (89, 1.0)):                                 # dos autos esperando
+    cw = int(26 * sc) // 2 * 2
+    car = car_front(cw, random.choice([(150, 40, 40), (60, 80, 120), (190, 186, 170)]))
+    cv.alpha_composite(car, (int(GC - road_r(wy_) / 2 - cw / 2), wy_ - car.height))
+cva = np.asarray(cv, dtype=float)
+m = cva[..., 3] > 0
+near[m, :3] = cva[m, :3]; near[m, 3] = 255
+
 # vereda
 near[GROUND:, :, 3] = 255
 near[GROUND:, :, :3] = ramp((yy[GROUND:] - GROUND) / (H - GROUND), [(0, (150, 160, 140)), (1, (118, 128, 112))])
@@ -259,14 +321,58 @@ for lx in range(0, W, 22):                                              # juntas
 for yrow in (GROUND + 7, GROUND + 17, GROUND + 30):
     if yrow < H:
         near[yrow, :, :3] -= 16
+near[GROUND:, GX - 2:GX + GW + 2, :3] = (70, 76, 74)                     # calzada bajo la senda
+near[GROUND:, GX - 3, :3] = (190, 196, 180); near[GROUND:, GX + GW + 2, :3] = (190, 196, 180)  # cordones
+yb, hb = GROUND + 2, 1
+while yb < H:                                                          # rayas de la senda (más gruesas cerca)
+    near[yb:yb + hb, GX + 2:GX + GW - 2, :3] = (226, 228, 214)
+    yb += hb * 2 + 1
+    hb += 1
 for _ in range(3):                                                      # postes / farolas
-    px = random.randrange(10, W - 10)
+    px = random.choice([random.randrange(10, GX - 12), random.randrange(GX + GW + 8, W - 10)])
     near[30:GROUND, px:px + 2, :3] = (40, 48, 44); near[30:GROUND, px:px + 2, 3] = 255
     near[30:32, px - 4:px + 6, :3] = (40, 48, 44); near[30:32, px - 4:px + 6, 3] = 255
 near_rgb = posterize(np.clip(near[..., :3], 0, 255), 40, 8)
 near_im = Image.fromarray(np.dstack([near_rgb, near[..., 3]]).astype(np.uint8), "RGBA")
 tile = image(near_im, up=1) + image(near_im, x=-W, up=1)
-body.append(f'<g style="{track(0, NEAR_SPEED, W, 0, 0)}">{tile}</g>')
+
+
+def car_rear(w, body):
+    h = int(w * .55)
+    im = Image.new("RGBA", (w, h), (0, 0, 0, 0)); d = ImageDraw.Draw(im)
+    d.rectangle([w * .18, 0, w * .82, h * .42], fill=tuple(int(c * .8) for c in body))
+    d.rectangle([w * .24, h * .08, w * .76, h * .38], fill=(40, 52, 54))                           # luneta
+    d.rectangle([0, h * .42, w - 1, h * .86], fill=body)
+    d.rectangle([w * .04, h * .5, w * .22, h * .62], fill=(230, 40, 40))                           # luces traseras
+    d.rectangle([w * .78, h * .5, w * .96, h * .62], fill=(230, 40, 40))
+    d.rectangle([w * .4, h * .6, w * .6, h * .72], fill=(220, 220, 200))                           # patente
+    d.rectangle([w * .04, h * .86, w * .2, h - 1], fill=(14, 14, 14))
+    d.rectangle([w * .8, h * .86, w * .96, h - 1], fill=(14, 14, 14))
+    return im
+
+
+clip_id = nid("gap")
+defs.append(f'<clipPath id="{clip_id}"><rect x="{GX}" y="{VY - 6}" width="{GW}" height="{GROUND - VY + 6}"/>'
+            f'<rect x="{GX - W}" y="{VY - 6}" width="{GW}" height="{GROUND - VY + 6}"/></clipPath>')
+cars = []
+CW0 = 26
+y0, y1 = GROUND + 6, VY + 2
+for j, col in enumerate([(200, 196, 180), (40, 44, 48), (120, 30, 36), (70, 100, 90)]):
+    im = car_rear(CW0, col)
+    k = nid("car")
+    s0, s1 = road_r(y0) / road_r(GROUND), road_r(y1) / road_r(GROUND)
+    x0, x1 = GC + road_r(y0) / 2, GC + road_r(y1) / 2
+    css.append(f"@keyframes {k}{{0%{{transform:translate({x0:.1f}px,{y0}px) scale({s0:.3f});opacity:1}}"
+               f"50%{{transform:translate({x1:.1f}px,{y1}px) scale({s1:.3f});opacity:1}}"
+               f"55%,100%{{transform:translate({x1:.1f}px,{y1}px) scale({s1:.3f});opacity:0}}}}")
+    spr = image(im, -CW0 // 2, -im.height, up=1)
+    for off in (0, -W):
+        cars.append(f'<g transform="translate({off} 0)"><g style="animation:{k} 7.2s {-j * 1.8:.1f}s infinite '
+                    f'cubic-bezier(.3,.6,.4,1)">{spr}</g></g>')
+tile += f'<g clip-path="url(#{clip_id})"><g style="animation:walkvis {T}s infinite linear">{"".join(cars)}</g></g>'
+# fase del tile: al congelar, la senda queda justo debajo de Claude y Lucas (x ≈ 93..185)
+TILE0 = 93 - GX - NEAR_SPEED * F0
+body.append(f'<g style="{track(TILE0, NEAR_SPEED, W, 0, 0)}">{tile}</g>')
 
 # ============================================================ figuras (dibujadas con PIL)
 SKIN = [(232, 196, 166), (200, 150, 116), (160, 112, 82), (110, 76, 56), (240, 210, 186)]
