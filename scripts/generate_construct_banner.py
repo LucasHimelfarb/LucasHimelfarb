@@ -2,17 +2,16 @@
 """Genera assets/lucas-himelfarb-construct.svg: segundo banner del perfil.
 
 Guiño a la escena del programa de entrenamiento: Claude (Morpheus) camina adelante
-entre una multitud y le explica a Lucas (Neo) qué es su perfil. Se le cruza un
-policía, aparece de repente una mujer de vestido rojo, Lucas se da vuelta a mirarla,
-Claude dice "mirá de nuevo" y es un agente; con "congelalo" la calle se frena en
-código verde mientras Claude termina de contar.
+y Lucas (Neo) lo sigue entre la multitud. Se le cruza un policía, aparece de repente
+una mujer de vestido rojo, Lucas se da vuelta a mirarla y ella se convierte en un
+agente; después la calle se congela en código verde.
 
 Uso:
     pip install pillow numpy
     python3 scripts/generate_construct_banner.py
 
-Editá DIALOG para cambiar lo que se dice. Mismo formato que el banner principal
-(320x128 escalado a 800x320, franjas cinemascope, viñeta, fuente 3x5).
+Mismo formato que el banner principal (320x128 escalado a 800x320, franjas
+cinemascope, viñeta).
 """
 import base64
 import io
@@ -747,13 +746,65 @@ for i in range(11):
 body.extend(crowd_back)
 
 # ============================================================ la mujer del vestido rojo (y el agente)
-RED = dict(coat=(200, 28, 44), shirt=(200, 28, 44), skin=(236, 200, 170), hair=(226, 186, 96), long_hair=True,
-           skirt=(214, 32, 50), skirt_len=19.5, pants=(236, 200, 170), shoe=(160, 16, 30), coat_len=9.5)
+def woman_in_red(h, frame):
+    """Silueta de reloj de arena: vestido rojo ajustado a la rodilla, pelo rubio largo, tacos."""
+    u = h / 24
+    w = int(12 * u) + 6
+    im = Image.new("RGBA", (w, h + 1), (0, 0, 0, 0)); d = ImageDraw.Draw(im)
+    cx = w / 2
+    skin, skin_sh = (238, 204, 176), (214, 172, 146)
+    red, red_hi, red_sh = (212, 22, 44), (244, 70, 84), (150, 10, 30)
+    hair, hair_hi = (232, 192, 104), (250, 226, 150)
+    sway = (.35 if frame == 0 else -.35) * u              # balanceo de cadera
+    stride = (1.7 if frame == 0 else .35) * u
+    foot = h - 1
+    knee = 15.6 * u
+    # piernas (de atrás primero), largas y finas, con tacos
+    for sg, col in ((1, skin_sh), (-1, skin)):
+        fx = cx + sway * .5 - sg * stride
+        d.polygon([(cx + sway - .7 * u, knee - u), (cx + sway + .6 * u, knee - u), (fx + .35 * u, foot - 1.1 * u),
+                   (fx - .35 * u, foot - 1.1 * u)], fill=col)
+        d.polygon([(fx - 1.2 * u, foot - .6 * u), (fx + .3 * u, foot - 1.2 * u), (fx + .5 * u, foot - .4 * u),
+                   (fx - 1.2 * u, foot)], fill=(176, 12, 34))                                   # zapato
+        d.line([(fx + .45 * u, foot - .5 * u), (fx + .5 * u, foot)], fill=(120, 6, 24), width=1)  # taco
+    # pelo largo por detrás (cae hasta media espalda y se mueve)
+    hx, hy = cx - .2 * u, 2.3 * u
+    flow = (.4 if frame == 0 else -.2) * u
+    d.polygon([(hx - .2 * u, hy - 1.6 * u), (hx + 1.6 * u, hy - 1.2 * u), (hx + 2.3 * u + flow, hy + 3.5 * u),
+               (hx + 2.0 * u + flow, hy + 6.8 * u), (hx + .9 * u + flow, hy + 6.2 * u), (hx + .3 * u, hy + 2.6 * u)], fill=hair)
+    # vestido: hombros, busto, cintura marcada, cadera, falda a la rodilla
+    body_pts = [(cx - 1.5 * u, 4.3 * u), (cx + 1.2 * u, 4.3 * u),               # hombros
+                (cx + 1.0 * u, 6.2 * u), (cx + .9 * u + sway * .3, 8.6 * u),       # espalda y cintura
+                (cx + 1.7 * u + sway, 10.8 * u), (cx + 1.4 * u + sway, knee),      # cadera y falda
+                (cx - 1.3 * u + sway, knee), (cx - 1.5 * u + sway, 10.8 * u),
+                (cx - .8 * u + sway * .3, 8.6 * u), (cx - 1.9 * u, 6.4 * u)]      # cintura y busto
+    d.polygon(body_pts, fill=red)
+    d.line([(cx - 1.6 * u, 5.0 * u), (cx - 1.8 * u, 6.3 * u)], fill=red_hi, width=1)           # brillo del busto
+    d.line([(cx - .9 * u + sway * .3, 8.8 * u), (cx - 1.4 * u + sway, 10.8 * u)], fill=red_hi, width=1)
+    d.line([(cx + .8 * u + sway * .3, 8.8 * u), (cx + 1.5 * u + sway, 10.8 * u)], fill=red_sh, width=1)
+    d.line([(cx - .4 * u + sway, 12 * u), (cx - .2 * u + sway, knee)], fill=red_sh, width=1)  # pliegue
+    # escote y hombros descubiertos
+    d.polygon([(cx - 1.4 * u, 4.2 * u), (cx + 1.1 * u, 4.2 * u), (cx + .6 * u, 4.9 * u), (cx - 1.2 * u, 5.0 * u)], fill=skin)
+    # brazo con balanceo y cartera chica
+    sw = (-1.2 if frame == 0 else .6) * u
+    d.line([(cx + .1 * u, 4.8 * u), (cx + sw * .5, 7.6 * u), (cx + sw, 10.2 * u)], fill=skin, width=max(1, int(.75 * u)))
+    d.rectangle([cx + sw - .7 * u, 10.0 * u, cx + sw + .6 * u, 10.9 * u], fill=(30, 20, 24))
+    # cabeza
+    d.rectangle([cx - .55 * u, 3.4 * u, cx + .25 * u, 4.4 * u], fill=skin)                         # cuello fino
+    d.ellipse([hx - 1.3 * u, hy - 1.7 * u, hx + 1.3 * u, hy + 1.6 * u], fill=skin)
+    d.chord([hx - 1.5 * u, hy - 2.0 * u, hx + 1.6 * u, hy + 1.1 * u], 170, 360, fill=hair)
+    d.polygon([(hx - 1.5 * u, hy - 1.1 * u), (hx - .4 * u, hy - 1.9 * u), (hx - .9 * u, hy - .2 * u)], fill=hair)  # flequillo
+    d.line([(hx - .3 * u, hy - 1.7 * u), (hx + 1.2 * u, hy - 1.2 * u)], fill=hair_hi, width=1)
+    d.point((hx - .9 * u, hy - .3 * u), fill=(40, 30, 40))                                         # ojo
+    d.line([(hx - 1.2 * u, hy + .75 * u), (hx - .75 * u, hy + .75 * u)], fill=(200, 16, 40), width=1)  # labios
+    return im
+
+
 AGENT = dict(coat=(36, 40, 40), shirt=(226, 230, 222), skin=(214, 172, 140), hair=(28, 24, 20), tie=(8, 8, 8),
              shades=(6, 6, 8), earpiece=(200, 200, 190), pants=(30, 32, 34), coat_len=13.5)
 WH, APPEAR, TURN = 50, 13.0, 18.6
 WY = 110                                            # carril medio: entre la multitud y los protagonistas
-wred = [figure(WH, 0, RED), figure(WH, 1, RED)]
+wred = [woman_in_red(WH, 0), woman_in_red(WH, 1)]
 wagt = [figure(WH, 0, AGENT), figure(WH, 1, AGENT)]
 # aparece de golpe (con un parpadeo) y cruza; al "mirá de nuevo" se vuelve agente
 css.append(f"@keyframes wred{{0%,{pct(APPEAR) - .001:.3f}%{{opacity:0}}{pct(APPEAR):.3f}%{{opacity:1}}"
@@ -823,56 +874,11 @@ for i in range(2):
     at_freeze = [10, 560][i]                       # fuera de cuadro al congelar: no tapan a los protagonistas
     body.append(f'<g opacity=".93" style="{track(at_freeze - v * F0, v, FS, 100, 140)}">{s}</g>')
 
-# ============================================================ diálogo
-# (inicio, fin, hablante, [líneas]) en segundos del ciclo; 3x5 => máximo ~45 caracteres por línea
-DIALOG = [
-    (0.3, 4.4, "LUCAS", ["DONDE ESTAMOS?"]),
-    (4.4, 9.2, "CLAUDE", ["EN TU PERFIL, LUCAS. ES UN SISTEMA.", "DE DIA: SOFTWARE ENGINEER EN HUMAND."]),
-    (9.2, 14.0, "CLAUDE", ["BASE: CORDOBA, ARGENTINA.", "DE NOCHE: LIMAO, IA PARA PYMES."]),
-    (14.0, 17.6, "CLAUDE", ["ESTABAS MIRANDO A LA MUJER DE ROJO?"]),
-    (17.6, 20.0, "CLAUDE", ["MIRA DE NUEVO."]),
-    (20.0, 24.0, "CLAUDE", ["CONGELALO.", "ESTO ES UN PROGRAMA DE ENTRENAMIENTO."]),
-    (24.0, 28.0, "CLAUDE", ["INVENTARIO: MATE CEBADO, CURIOSIDAD X99.", "EN GITHUB DESDE 2019. TU COPILOTO: YO."]),
-    (28.0, 31.8, "CLAUDE", ["SEGUIME, LUCAS.", "HAY CODIGO POR ESCRIBIR."]),
-]
-BX, BY, BW, BH = 8, 10, 172, 27
-HEAD_COL = {"CLAUDE": "#ff9a70", "LUCAS": "#ffb050"}
-TXT = "#d8f6f0"
-panel = (rect(BX, BY, BW, BH, "#05060c", ' opacity=".72"')
-         + f'<rect x="{BX + .5}" y="{BY + .5}" width="{BW - 1}" height="{BH - 1}" fill="none" stroke="{TXT}" opacity=".22"/>')
-for cx_, cy_, dx_, dy_ in [(BX, BY, 1, 1), (BX + BW - 1, BY, -1, 1), (BX, BY + BH - 1, 1, -1), (BX + BW - 1, BY + BH - 1, -1, -1)]:
-    panel += f'<g fill="{TXT}" opacity=".8">{runs({(cx_ + dx_ * i, cy_) for i in range(4)} | {(cx_, cy_ + dy_ * i) for i in range(4)})}</g>'
-# el panel se pone verde durante el congelado
-panel += rect(BX, BY, BW, BH, "#0a3a1a", f' opacity="0" style="animation:frzp {T}s infinite linear"')
-css.append(f"@keyframes frzp{{0%,{pct(F0) - .01:.3f}%{{opacity:0}}{pct(F0):.3f}%,{pct(F1) - .01:.3f}%{{opacity:.5}}{pct(F1):.3f}%,100%{{opacity:0}}}}")
-lines_svg = []
-for t0, t1, who, lines in DIALOG:
-    seg = []
-    t = t0 + .15
-    rows = [(f"> {who}", HEAD_COL[who])] + [(ln, TXT) for ln in lines]
-    for li, (txt, col) in enumerate(rows):
-        ly = BY + 3 + li * 8
-        n = len(txt)
-        px = mini_px(txt, BX + 4, ly)
-        cid, ka = nid("cl"), nid("ty")
-        dur = 0.01 if li == 0 else n * .045
-        css.append(f"@keyframes {ka}{{0%,{pct(t):.3f}%{{transform:scaleX(0)}}{pct(t + dur):.3f}%,100%{{transform:scaleX(1)}}}}")
-        defs.append(f'<clipPath id="{cid}"><rect x="{BX + 4}" y="{ly - 1}" width="{n * 4 + 1}" height="7" '
-                    f'style="transform-origin:{BX + 4}px 0;animation:{ka} {T}s infinite steps({max(n, 1)})"/></clipPath>')
-        seg.append(f'<g clip-path="url(#{cid})"><g fill="#000" opacity=".5" transform="translate(1 1)">{runs(px)}</g>'
-                   f'<g fill="{col}">{runs(px)}</g></g>')
-        t += dur + (.25 if li else .1)
-    lines_svg.append(f'<g opacity="0" style="{window(t0, t1)}">{"".join(seg)}</g>')
-css.append(f"@keyframes box{{0%{{transform:scaleY(0)}}{pct(.25):.3f}%,{pct(T - .25):.3f}%{{transform:scaleY(1)}}100%{{transform:scaleY(0)}}}}")
-css.append("@keyframes cur{0%,49.9%{opacity:1}50%,100%{opacity:0}}")
-cursor = rect(BX + BW - 7, BY + BH - 6, 3, 3, TXT, ' style="animation:cur .8s infinite steps(1)"')
-body.append(f'<g style="transform-origin:0 {BY}px;animation:box {T}s infinite linear">{panel}{"".join(lines_svg)}{cursor}</g>')
-
 # ============================================================ viñeta, franjas y tinte verde
 defs.append('<radialGradient id="vig" cx=".5" cy=".5" r=".75"><stop offset=".55" stop-color="#000" stop-opacity="0"/>'
             '<stop offset="1" stop-color="#000" stop-opacity=".55"/></radialGradient>')
-body.insert(len(body) - 1, rect(0, 0, W, H, "#2a6a3a", ' opacity=".10"'))
-body.insert(len(body) - 1, rect(0, 0, W, H, "url(#vig)"))
+body.append(rect(0, 0, W, H, "#2a6a3a", ' opacity=".10"'))
+body.append(rect(0, 0, W, H, "url(#vig)"))
 body.append(rect(0, 0, W, 6, "#000") + rect(0, H - 6, W, 6, "#000"))
 
 svg = (f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {W} {H}" width="{OUT_W}" height="{OUT_H}" '
